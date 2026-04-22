@@ -12,9 +12,9 @@ export default defineConfig({
         input: resolve(__dirname, 'input.html'),
         scan: resolve(__dirname, 'scan.html'),
         pelaporan: resolve(__dirname, 'pelaporan.html'),
-        'daftar-pelaporan': resolve(__dirname, 'daftar-pelaporan.html'),
-        'daftar-data': resolve(__dirname, 'daftar-data.html'),
-        'history': resolve(__dirname, 'history.html')
+        daftarData: resolve(__dirname, 'daftar-data.html'),
+        history: resolve(__dirname, 'history.html')
+        daftarpelaporan: resolve(__dirname, 'daftar-pelaporan.html'),
       }
     }
   }
