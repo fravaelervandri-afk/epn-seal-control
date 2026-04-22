@@ -1,0 +1,71 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&display=swap');
+
+:root {
+  font-family: 'Nunito', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+body { 
+  font-family: 'Nunito', system-ui, sans-serif; 
+  overflow: hidden; 
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.font-sans {
+  font-family: 'Nunito', system-ui, sans-serif !important;
+}
+
+/* --- OVERRIDE KETEBALAN FONT GLOBAL --- */
+/* Menurunkan satu tingkat ketebalan agar UI tidak terlihat kaku/raksasa */
+b, strong, .font-bold {
+  font-weight: 600 !important;
+}
+.font-extrabold {
+  font-weight: 700 !important;
+}
+.font-black {
+  font-weight: 800 !important;
+}
+
+/* --- ANIMASI TRANSISI TAB --- */
+@keyframes fadeSlideUp {
+  from { 
+    opacity: 0; 
+    transform: translateY(20px); 
+  }
+  to { 
+    opacity: 1; 
+    transform: translateY(0); 
+  }
+}
+
+.animate-tab {
+  animation: fadeSlideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+/* ---------------------------- */
+
+/* Scrollbar styling (Lama) */
+.main-scroll::-webkit-scrollbar { width: 8px; }
+.main-scroll::-webkit-scrollbar-track { background: transparent; }
+.main-scroll::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 20px; }
+
+/* Custom Scrollbar (Baru - untuk komponen MPA) */
+.custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* Animasi Scanner */
+@keyframes scan-animation { 
+  0% { transform: translateY(-80px); opacity: 0; } 
+  50% { opacity: 1; } 
+  100% { transform: translateY(80px); opacity: 0; } 
+}
+
+/* Perbaikan UI Scanner */
+#reader video, #input-reader video { border-radius: 1rem; object-fit: cover; }
+#reader__dashboard_section_csr span, #input-reader__dashboard_section_csr span { font-family: 'Nunito', system-ui, sans-serif !important; }
+
+/* Container Query untuk Teks ID */
+#master-template-container, .stiker-item { container-type: inline-size; }

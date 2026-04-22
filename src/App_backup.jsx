@@ -1,0 +1,3442 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  QrCode, 
+  Database, 
+  PlusCircle, 
+  List, 
+  ScanLine, 
+  Printer, 
+  Trash2, 
+  ChevronDown, 
+  ChevronRight,
+  ShieldCheck,
+  ShieldAlert,
+  Camera,
+  Info,
+  User,
+  CalendarClock,
+  History,
+  Loader2,
+  Image as ImageIcon,
+  Search,
+  Menu,
+  X,
+  Scan,
+  Lock,
+  Plus,
+  Download,
+  Layers,
+  Type,
+  FileText,
+  CheckCircle2,
+  AlertTriangle,
+  SwitchCamera
+} from 'lucide-react';
+
+// --- INTEGRASI CLOUD DATABASE (SUPABASE UNTUK PRODUKSI) ---
+const SUPABASE_URL = 'https://omquaygcohibqzkehavk.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_a9_5QcTZlx3jYLKN6AM9dw__iB1uQ14';
+
+// --- INJEKSI FONT GLOBAL ---
+if (typeof document !== 'undefined' && !document.getElementById('nunito-font-style')) {
+  const style = document.createElement('style');
+  style.id = 'nunito-font-style';
+  style.innerHTML = `
+    @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap');
+    body, .font-sans { font-family: 'Nunito', sans-serif !important; }
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    @keyframes scan-animation { 0% { transform: translateY(-80px); opacity: 0; } 50% { opacity: 1; } 100% { transform: translateY(80px); opacity: 0; } }
+    
+    /* Perbaikan styling untuk scanner kamera html5-qrcode */
+    #reader video, #input-reader video { border-radius: 1rem; object-fit: cover; }
+    #reader__dashboard_section_csr span, #input-reader__dashboard_section_csr span { font-family: 'Nunito', sans-serif !important; }
+    
+    /* Memaksa kontainer pratinjau agar mendukung ukuran relatif CQW (Container Query Width) untuk font text */
+    #master-template-container, .stiker-item { container-type: inline-size; }
+  `;
+  document.head.appendChild(style);
+}
+
+// --- BAGIAN 0: KONFIGURASI GOOGLE APPS SCRIPT ---
+const GOOGLE_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyaA8vZPHL_nD9poI4Afqb_NfGMayq80dBgqtANoAaZ7zw2BueodaugYSNRdpRN75R8/exec"; 
+
+// --- BAGIAN 2: KOMPONEN CUSTOM QR CODE (API SERVER ONLINE) ---
+const CustomQRCodeWithID = ({ displayValue, qrPayload, size = 200, showText = false }) => {
+  const canvasRef = useRef(null);
+  
+  useEffect(() => {
+    let isMounted = true;
+    
+    const drawQR = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const img = new Image();
+      img.crossOrigin = "Anonymous";
+      
+      // Menggunakan API QR Server Eksternal
+      img.src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(qrPayload)}&qzone=2&ecc=H`;
+      
+      img.onload = () => {
+        if (!isMounted) return;
+        ctx.clearRect(0, 0, size, size);
+        ctx.drawImage(img, 0, 0, size, size);
+        
+        if (showText) {
+          const fontSize = Math.floor(size * 0.09); 
+          ctx.font = `bold ${fontSize}px monospace`;
+          const textWidth = ctx.measureText(displayValue).width;
+          const paddingX = Math.floor(size * 0.03);
+          const paddingY = Math.floor(size * 0.03);
+          const rectWidth = textWidth + (paddingX * 2);
+          const rectHeight = fontSize + (paddingY * 2); 
+          const rectX = size - rectWidth;
+          const rectY = size - rectHeight;
+          
+          ctx.fillStyle = 'white';
+          ctx.fillRect(rectX, rectY, rectWidth, rectHeight);
+          ctx.fillStyle = 'black';
+          ctx.textAlign = 'right';
+          ctx.textBaseline = 'bottom';
+          ctx.fillText(displayValue, size - paddingX, size - paddingY + (fontSize * 0.1));
+        }
+      };
+
+      img.onerror = () => {
+        console.error("Gagal memuat QR Code dari API server.");
+      };
+    };
+    
+    drawQR();
+    return () => { isMounted = false; };
+  }, [displayValue, qrPayload, size, showText]);
+
+  return <canvas ref={canvasRef} width={size} height={size} className="w-full h-auto block bg-white" />;
+};
+
+// --- BAGIAN 3: EKSTRAKTOR URL & HALAMAN VERIFIKASI PUBLIK ---
+const extractSealId = (text) => {
+  try {
+      if (text.includes('?verify=')) {
+          const url = new URL(text);
+          return url.searchParams.get('verify') || text;
+      }
+      return text;
+  } catch(e) {
+      return text;
+  }
+};
+
+const PublicVerification = ({ sealId, dbClient }) => {
+  const [status, setStatus] = useState('loading');
+  const [data, setData] = useState([]);
+
+  useEffect(() => {
+    const checkSeal = async () => {
+      try {
+        const { data: sealData, error } = await dbClient
+          .from('installed_seals')
+          .select('*')
+          .eq('sealId', sealId);
+
+        if (error) throw error;
+
+        if (sealData && sealData.length > 0) {
+          setData(sealData);
+          setStatus('valid');
+        } else {
+          setStatus('invalid');
+        }
+      } catch (err) {
+        console.error("Verification error:", err);
+        setStatus('invalid');
+      }
+    };
+    checkSeal();
+  }, [dbClient, sealId]);
+
+  return (
+    <div className="min-h-screen bg-[#f8f9fa] flex flex-col items-center justify-center p-6 font-sans">
+      <div className="bg-white w-full max-w-md rounded-3xl shadow-xl overflow-hidden animate-in zoom-in duration-500">
+         <div className="bg-slate-900 p-4 flex justify-center">
+             <img src="/logo-elnusa.png" alt="Elnusa Logo" className="h-8 object-contain brightness-0 invert" onError={(e) => e.target.style.display='none'} />
+         </div>
+         <div className="p-8 flex flex-col items-center text-center">
+            {status === 'loading' && (
+               <div className="py-12 flex flex-col items-center">
+                  <Loader2 size={48} className="animate-spin text-[#146b99] mb-4" />
+                  <p className="text-slate-500 font-bold">Memverifikasi Data Segel...</p>
+               </div>
+            )}
+            {status === 'valid' && (
+               <>
+                  <div className="w-24 h-24 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mb-6 shadow-inner">
+                     <ShieldCheck size={48} />
+                  </div>
+                  <h2 className="text-3xl font-black text-slate-800 mb-2">SEAL VALID</h2>
+                  <p className="text-slate-500 font-medium mb-6">Segel ini resmi terdaftar di sistem Elnusa Petrofin.</p>
+                  
+                  <div className="w-full bg-slate-50 rounded-xl p-4 text-left border border-slate-200 space-y-3">
+                     <div>
+                        <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">ID Segel</p>
+                        <p className="font-mono font-bold text-[#146b99] text-lg">{sealId}</p>
+                     </div>
+                     {data.map((item, idx) => (
+                         <div key={idx} className="pt-3 border-t border-slate-200">
+                            <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Detail Objek {idx + 1}</p>
+                            <p className="font-bold text-slate-800">{item.nopol} ({item.seal_category})</p>
+                            <p className="text-xs text-slate-500 mt-1">Dipasang: {item.installDate}</p>
+                            <p className="text-xs text-slate-500">Lokasi: {item.location}</p>
+                         </div>
+                     ))}
+                  </div>
+               </>
+            )}
+            {status === 'invalid' && (
+               <>
+                  <div className="w-24 h-24 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mb-6 shadow-inner">
+                     <ShieldAlert size={48} />
+                  </div>
+                  <h2 className="text-3xl font-black text-slate-800 mb-2">TIDAK DITEMUKAN</h2>
+                  <p className="text-slate-500 font-medium mb-6">ID Segel <b className="font-mono text-slate-700">{sealId}</b> tidak terdaftar sebagai segel terpasang atau tidak valid.</p>
+               </>
+            )}
+
+            <button onClick={() => window.location.href = '/'} className="mt-8 w-full py-3.5 bg-[#146b99] hover:bg-[#11577c] text-white font-bold rounded-xl transition-colors shadow-md">
+               Masuk ke Sistem Pusat
+            </button>
+         </div>
+      </div>
+    </div>
+  );
+};
+
+
+// ============================================================================
+// KOMPONEN: LANDING PAGE
+// ============================================================================
+const LandingPage = ({ onLogin, dbClient }) => {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setError('');
+
+    if (dbClient) {
+      try {
+        const authEmail = `${username.trim()}@epn.com`;
+        const { data: authData, error: authError } = await dbClient.auth.signInWithPassword({
+          email: authEmail,
+          password: password,
+        });
+
+        if (authError) throw authError;
+
+        const { data: roleData } = await dbClient
+          .from('user_roles')
+          .select('role, name, department')
+          .eq('user_id', authData.user.id)
+          .single();
+
+        const userRole = roleData ? roleData.role : 'user';
+        const userName = roleData ? roleData.name : username;
+        const userDept = roleData ? roleData.department : 'Kantor Pusat';
+
+        onLogin({ role: userRole, name: userName, department: userDept });
+      } catch (err) {
+        setError('Username atau password salah.');
+      } finally {
+        setIsLoading(false);
+      }
+    } else {
+      setError('Koneksi ke sistem database terputus. Silakan muat ulang halaman.');
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col md:flex-row bg-white font-sans selection:bg-blue-200">
+      <div className="hidden md:flex md:w-1/2 border-r border-gray-100 flex-col justify-center items-center p-12 relative overflow-hidden bg-white">
+        <img 
+          src="login-bg.png" 
+          alt="" 
+          className="absolute inset-0 w-full h-full object-cover opacity-75 pointer-events-none" 
+          onError={(e) => { e.target.style.display = 'none'; }} 
+        />
+        <div className="absolute inset-0 bg-gradient-to-r from-white/80 via-white/50 to-[#8dc63f]/30 backdrop-blur-[1px]"></div>
+        <div className="relative z-10 w-full max-w-lg flex flex-col items-center gap-6 animate-in zoom-in duration-700">
+          <img 
+            src="landing-page.png" 
+            alt="Security Seal GPS & CCTV" 
+            className="w-full h-auto max-w-[12rem] object-contain drop-shadow-[0_10px_30px_rgba(0,0,0,0.2)] hover:scale-105 transition-transform duration-700 ease-out" 
+            onError={(e) => { e.target.style.display = 'none'; }} 
+          />
+          <div className="text-center mt-2 space-y-2">
+            <h1 className="text-2xl md:text-[1.75rem] leading-tight font-black text-[#1e293b] tracking-tight drop-shadow-sm">
+              Selamat Datang di <span className="text-[#146b99]">EPN Security Seal Control</span>
+            </h1>
+            <p className="text-slate-900 font-bold text-sm md:text-base drop-shadow-md">
+              Pusat Kendali Keamanan Segel Digital Elnusa Petrofin
+            </p>
+          </div>
+        </div>
+      </div>
+      
+      <div className="w-full md:w-1/2 flex flex-col justify-center items-center p-8 bg-white z-10 relative shadow-[-10px_0_30px_rgba(0,0,0,0.02)]">
+        <div className="w-full max-w-md">
+          <div className="mb-10 text-center md:text-left">
+            <img 
+              src="/logo-elnusa.png" 
+              alt="Elnusa Petrofin" 
+              className="h-10 object-contain mx-auto md:mx-0 mb-8" 
+              onError={(e) => { e.target.style.display='none'; }} 
+            />
+            <h2 className="text-2xl font-extrabold text-gray-800 mb-2">Login ke Sistem</h2>
+            <p className="text-gray-500 text-sm font-medium">Silakan masukkan akun Anda.</p>
+          </div>
+          
+          {error && (
+            <div className="mb-6 p-3 bg-red-50 border border-red-200 text-red-600 text-sm rounded-xl flex items-center gap-2 font-medium animate-in fade-in">
+              <ShieldAlert size={16} /> {error}
+            </div>
+          )}
+          
+          <form onSubmit={handleLogin} className="space-y-6">
+            <div>
+              <label className="block text-xs font-bold text-[#156592] uppercase tracking-wider mb-2">Username</label>
+              <div className="relative">
+                <User size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input 
+                  type="text" 
+                  required 
+                  value={username} 
+                  onChange={(e) => setUsername(e.target.value)} 
+                  placeholder="username" 
+                  className="w-full pl-11 pr-4 py-3.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#146b99] outline-none text-sm font-semibold transition-all bg-white" 
+                />
+              </div>
+            </div>
+            
+            <div>
+              <label className="block text-xs font-bold text-[#156592] uppercase tracking-wider mb-2">Password</label>
+              <div className="relative">
+                <Lock size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input 
+                  type="password" 
+                  required 
+                  value={password} 
+                  onChange={(e) => setPassword(e.target.value)} 
+                  placeholder="••••••••" 
+                  className="w-full pl-11 pr-4 py-3.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#146b99] outline-none text-sm font-semibold transition-all bg-white" 
+                />
+              </div>
+            </div>
+            
+            <div className="pt-4">
+              <button 
+                type="submit" 
+                disabled={isLoading} 
+                className="w-full bg-[#156592] hover:bg-[#11577c] text-white py-3.5 rounded-xl font-bold text-sm shadow-md transition-all flex justify-center items-center gap-2 disabled:opacity-70"
+              >
+                {isLoading ? <Loader2 size={18} className="animate-spin" /> : 'Login'}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
+// ============================================================================
+// KOMPONEN UTAMA (LAYOUT): SIDEBAR
+// ============================================================================
+const Sidebar = ({ activeMenu, onMenuChange, isMobileMenuOpen, setIsMobileMenuOpen, isAdmin }) => {
+  const [isGeneratorOpen, setIsGeneratorOpen] = useState(false);
+  const [isDataSealOpen, setIsDataSealOpen] = useState(true);
+  const [isReportOpen, setIsReportOpen] = useState(false);
+
+  const MenuItem = ({ id, icon: Icon, label, isChild = false }) => (
+    <button
+      onClick={() => { 
+        onMenuChange(id); 
+        setIsMobileMenuOpen(false); 
+      }}
+      className={`w-full flex items-center gap-3 px-4 py-3 text-sm transition-all duration-200 ${
+        activeMenu === id 
+          ? 'bg-blue-50 text-blue-700 border-r-4 border-blue-600 font-bold' 
+          : 'text-gray-600 hover:bg-gray-50'
+      } ${isChild ? 'pl-12' : ''}`}
+    >
+      {Icon && <Icon size={18} className={activeMenu === id ? 'text-blue-600' : 'text-gray-400'} />}
+      <span>{label}</span>
+    </button>
+  );
+
+  return (
+    <>
+      {isMobileMenuOpen && (
+         <div 
+           className="fixed inset-0 bg-slate-900/40 z-40 md:hidden backdrop-blur-sm transition-opacity" 
+           onClick={() => setIsMobileMenuOpen(false)} 
+         />
+      )}
+      <aside className={`fixed inset-y-0 left-0 transform ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} md:relative md:translate-x-0 transition duration-300 ease-in-out w-64 bg-white border-r border-gray-200 flex flex-col shrink-0 z-50 shadow-[4px_0_24px_rgba(0,0,0,0.02)]`}>
+        <div className="h-16 border-b border-gray-100 flex items-center justify-between px-6">
+          <img 
+            src="/logo-elnusa.png" 
+            alt="Elnusa Petrofin" 
+            className="w-36 h-auto max-h-10 object-contain" 
+            onError={(e) => { e.target.style.display='none'; e.target.nextSibling.style.display='flex'; }} 
+          />
+          <div className="hidden items-center gap-3 w-full">
+            <div className="w-8 h-8 bg-[#8dc63f] rounded-lg flex items-center justify-center text-white">
+              <QrCode size={20} />
+            </div>
+            <div>
+              <h1 className="font-black text-gray-800 leading-none">SEAL MASTER</h1>
+              <p className="text-[10px] text-[#8dc63f] font-bold tracking-tighter uppercase">Elnusa Petrofin</p>
+            </div>
+          </div>
+          <button 
+            className="md:hidden text-gray-400 hover:text-gray-600" 
+            onClick={() => setIsMobileMenuOpen(false)}
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto py-4 custom-scrollbar">
+          {isAdmin && (
+            <div className="mb-2">
+              <button 
+                onClick={() => setIsGeneratorOpen(!isGeneratorOpen)} 
+                className="w-full flex items-center justify-between px-6 py-3 text-sm text-gray-600 hover:bg-gray-50 transition-colors font-semibold"
+              >
+                <div className="flex items-center gap-3">
+                  <QrCode size={18} className="text-gray-400" />
+                  <span>QR Generator</span>
+                </div>
+                {isGeneratorOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+              </button>
+              
+              {isGeneratorOpen && (
+                <div className="bg-gray-50/50">
+                  <MenuItem id="generator" icon={PlusCircle} label="Buat Baru" isChild />
+                  <MenuItem id="histori-generator" icon={History} label="Histori" isChild />
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="mt-2">
+            <button 
+              onClick={() => setIsDataSealOpen(!isDataSealOpen)} 
+              className="w-full flex items-center justify-between px-6 py-3 text-sm text-gray-600 hover:bg-gray-50 transition-colors font-semibold"
+            >
+              <div className="flex items-center gap-3">
+                <Database size={18} className="text-gray-400" />
+                <span>Data Seal</span>
+              </div>
+              {isDataSealOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            </button>
+            
+            {isDataSealOpen && (
+              <div className="bg-gray-50/50">
+                <MenuItem id="input-data" icon={PlusCircle} label="Input Data Seal" isChild />
+                {isAdmin && <MenuItem id="daftar-data" icon={List} label="Daftar Data Seal" isChild />}
+              </div>
+            )}
+          </div>
+
+          <div className="mt-2">
+            <button 
+              onClick={() => setIsReportOpen(!isReportOpen)} 
+              className="w-full flex items-center justify-between px-6 py-3 text-sm text-gray-600 hover:bg-gray-50 transition-colors font-semibold"
+            >
+              <div className="flex items-center gap-3">
+                <Layers size={18} className="text-gray-400" />
+                <span>Pelaporan</span>
+              </div>
+              {isReportOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            </button>
+            
+            {isReportOpen && (
+              <div className="bg-gray-50/50">
+                <MenuItem id="pelaporan-segel" icon={FileText} label="Pelaporan Segel" isChild />
+                {isAdmin && <MenuItem id="daftar-pelaporan" icon={List} label="Daftar Pelaporan" isChild />}
+              </div>
+            )}
+          </div>
+
+          <div className="px-3 mt-4 pt-2 border-t border-gray-100">
+            <button 
+              onClick={() => { onMenuChange('scan'); setIsMobileMenuOpen(false); }} 
+              className={`w-full flex items-center gap-3 px-3 py-3 text-sm rounded-lg transition-all ${
+                activeMenu === 'scan' ? 'bg-blue-50 text-[#146b99] font-black' : 'text-slate-600 font-bold hover:bg-slate-50'
+              }`}
+            >
+              <ScanLine size={18} />
+              <span>Scan QR</span>
+            </button>
+          </div>
+        </div>
+      </aside>
+    </>
+  );
+};
+
+
+// ============================================================================
+// KOMPONEN UTAMA (LAYOUT): HEADER
+// ============================================================================
+const Header = ({ activeMenu, setIsMobileMenuOpen, currentUser, onLogout, isSyncing }) => {
+  const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
+
+  return (
+    <header className="bg-white h-16 flex items-center px-4 md:px-8 border-b border-slate-200 justify-between shrink-0 sticky top-0 z-10 w-full shadow-sm">
+      <div className="flex items-center gap-4">
+        <button 
+          className="md:hidden text-slate-500 hover:text-[#146b99] transition-colors" 
+          onClick={() => setIsMobileMenuOpen(true)}
+        >
+           <Menu size={24} />
+        </button>
+        <div className="hidden sm:flex items-center gap-2 text-sm text-slate-400 font-semibold">
+          <span>Beranda</span> <ChevronRight size={14} />
+          <span className="text-[#146b99] font-bold capitalize">{activeMenu.replace('-', ' ')}</span>
+          
+          {/* Indikator Sinkronisasi Modern (Tanpa Memblokir Layar) */}
+          <div className="ml-4 pl-4 border-l border-slate-200 flex items-center gap-2 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+             {isSyncing ? (
+               <><Loader2 size={14} className="animate-spin text-blue-500" />...</>
+             ) : (
+               <><CheckCircle2 size={14} className="text-emerald-500" /> </>
+             )}
+          </div>
+        </div>
+      </div>
+      
+      <div className="flex items-center gap-3 md:gap-4">
+        <div className="hidden sm:flex flex-col text-right">
+           <p className="text-sm font-black text-[#146b99] leading-none mb-1">{currentUser.name}</p>
+           <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest leading-none">{currentUser.role}</p>
+        </div>
+        
+        <div className="relative">
+          <button 
+            onClick={() => setIsLogoutModalOpen(!isLogoutModalOpen)} 
+            className="flex items-center justify-center w-10 h-10 rounded-full border border-slate-200 bg-slate-50 text-slate-400 hover:bg-slate-100 transition-colors shrink-0 focus:outline-none"
+          >
+             <User size={20} />
+          </button>
+          
+          {isLogoutModalOpen && (
+            <div className="absolute top-full right-0 mt-2 w-56 bg-white border border-slate-200 rounded-md shadow-lg z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+              <div className="px-4 py-3 text-sm text-slate-700 font-semibold uppercase tracking-wide truncate">
+                {currentUser.name}
+              </div>
+              <div className="border-t border-slate-200"></div>
+              <button 
+                onClick={() => { setIsLogoutModalOpen(false); onLogout(); }} 
+                className="w-full text-left px-4 py-3 text-sm text-slate-600 hover:bg-slate-50 transition-colors rounded-b-md"
+              >
+                Sign out
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </header>
+  );
+};
+
+
+// ============================================================================
+// KOMPONEN HALAMAN: VIEW QR GENERATOR
+// ============================================================================
+const ViewQRGenerator = ({ 
+  dbClient, 
+  generateHistory, 
+  setGenerateHistory, 
+  installedSeals,
+  previewBatchId, 
+  setPreviewBatchId, 
+  generatedQRs, 
+  setGeneratedQRs,
+  selectedBatchIds, 
+  setSelectedBatchIds,
+  templateImg,
+  setTemplateImg,
+  qrPositions,
+  setQrPositions,
+  textPositions,
+  setTextPositions,
+  printConfig,
+  setPrintConfig,
+  showNotification
+}) => {
+  const [inputPrefix, setInputPrefix] = useState('EPN-');
+  const [startNum, setStartNum] = useState(1);
+  const [count, setCount] = useState(1);
+  const [copiesPerId, setCopiesPerId] = useState(1);
+  
+  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false); 
+
+  const activeBatch = previewBatchId ? generateHistory.find(b => b.id === previewBatchId) : null;
+  const activeBatchUniqueIds = activeBatch ? [...new Set((activeBatch.items || []).map(item => item?.id).filter(Boolean))] : [];
+  
+  // Auto-hitung nomor selanjutnya berdasarkan histori agar Anda tidak perlu mengetik manual
+  useEffect(() => {
+    if (!previewBatchId) {
+      const samePrefixBatches = generateHistory.filter(b => b.prefix === inputPrefix);
+      if (samePrefixBatches.length > 0) {
+        const maxEnd = Math.max(...samePrefixBatches.map(b => parseInt(b.end) || 0));
+        setStartNum(maxEnd + 1);
+      } else {
+        setStartNum(1);
+      }
+    }
+  }, [inputPrefix, previewBatchId, generateHistory]);
+
+  const addQrPosition = () => {
+    setQrPositions([...qrPositions, { id: Date.now(), x: 50, y: 50, size: 20 }]);
+  };
+  
+  const removeQrPosition = (id) => { 
+    if (qrPositions.length > 1) {
+      setQrPositions(qrPositions.filter(pos => pos.id !== id)); 
+    }
+  };
+
+  const handleBulkGenerate = () => {
+    const newItems = [];
+    const duplicates = [];
+    
+    const uniqueGeneratedIds = [...new Set(generateHistory.flatMap(batch => (batch.items || []).map(item => item?.id).filter(Boolean)))];
+    
+    for (let i = 0; i < count; i++) {
+      const id = `${inputPrefix}${(startNum + i).toString().padStart(5, '0')}`;
+      if (uniqueGeneratedIds.includes(id)) {
+        duplicates.push(id);
+      }
+      for (let j = 0; j < copiesPerId; j++) {
+        newItems.push({ id });
+      }
+    }
+    
+    if (duplicates.length > 0) {
+       showNotification(`DUPLIKASI TERDETEKSI:\nTerdapat ${duplicates.length} ID yang sudah pernah digenerate sebelumnya.\nSistem memblokir duplikasi.`, 'error');
+       return;
+    }
+
+    setGeneratedQRs(newItems);
+    setPreviewBatchId(null); 
+    setSelectedBatchIds([]);
+  };
+
+  const handleGenerateQR = async () => {
+    if (!templateImg) {
+      return showNotification("Template stiker belum diunggah!", 'error');
+    }
+    
+    setIsGeneratingPDF(true);
+
+    let jsPDF;
+    try {
+        const jspdfModule = await import('https://esm.sh/jspdf');
+        jsPDF = jspdfModule.jsPDF || jspdfModule.default;
+    } catch (e) {
+        showNotification("Modul 'jspdf' gagal dimuat.", 'error'); 
+        setIsGeneratingPDF(false); 
+        return;
+    }
+
+    try {
+      const format = printConfig.paper.toLowerCase(); 
+      const orientation = printConfig.orientation === 'landscape' ? 'l' : 'p';
+      const pdf = new jsPDF({ orientation, unit: 'mm', format });
+
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      
+      const itemWidth = Number(printConfig.widthMm);
+      const itemHeight = Number(printConfig.heightMm);
+      
+      const cols = printConfig.cols;
+      const gapY = Number(printConfig.gapY) || 0;
+      const gapX = cols > 1 ? (Number(printConfig.gapX) || 0) : 0;
+
+      const effectiveMt = printConfig.autoCenter ? 0 : (Number(printConfig.marginTop) || 0);
+      const effectiveMb = printConfig.autoCenter ? 0 : (Number(printConfig.marginBottom) || 0);
+      
+      const availableHeight = pdfHeight - effectiveMt - effectiveMb;
+      let rowsPerPage = Math.floor((availableHeight + gapY) / (itemHeight + gapY));
+      
+      if (rowsPerPage < 1) {
+        rowsPerPage = 1;
+      }
+      
+      const itemsPerPage = cols * rowsPerPage;
+      let batchIdToUse = previewBatchId;
+
+      if (!previewBatchId) {
+         let nextBatchNum = 1;
+         if (generateHistory.length > 0) {
+           const maxNum = Math.max(...generateHistory.map(b => parseInt(b.id.replace('BCH-', ''), 10) || 0));
+           nextBatchNum = maxNum + 1;
+         }
+         batchIdToUse = `BCH-${String(nextBatchNum).padStart(5, '0')}`;
+         
+         const newBatch = {
+           id: batchIdToUse, 
+           date: new Date().toLocaleString('id-ID'), 
+           timestamp: Date.now(),
+           prefix: inputPrefix, 
+           start: startNum, 
+           end: startNum + count - 1, 
+           count: count, 
+           copies: copiesPerId, 
+           items: generatedQRs
+         };
+
+         if (dbClient) {
+           const { error } = await dbClient.from('generate_history').insert([newBatch]);
+           if (error) throw error;
+         }
+
+         setGenerateHistory([newBatch, ...generateHistory]);
+         setPreviewBatchId(batchIdToUse);
+         setSelectedBatchIds([...new Set(generatedQRs.map(item => item.id))]);
+      }
+
+      // Helper Fungsi Pembuat QR dengan API Online untuk PDF
+      const generateQROnCanvas = async (text, payload, size, showText) => {
+          return new Promise((resolve, reject) => {
+              const img = new Image();
+              img.crossOrigin = "Anonymous";
+              img.src = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(payload)}&qzone=2&ecc=H`;
+              
+              img.onload = () => {
+                  const canvas = document.createElement('canvas');
+                  canvas.width = size; 
+                  canvas.height = size;
+                  const ctx = canvas.getContext('2d');
+                  
+                  ctx.drawImage(img, 0, 0, size, size);
+                  
+                  if (showText) {
+                      const fontSize = Math.floor(size * 0.09); 
+                      ctx.font = `bold ${fontSize}px monospace`;
+                      const textWidth = ctx.measureText(text).width;
+                      const paddingX = Math.floor(size * 0.03);
+                      const paddingY = Math.floor(size * 0.03);
+                      
+                      ctx.fillStyle = 'white';
+                      ctx.fillRect(
+                        size - textWidth - (paddingX * 2), 
+                        size - fontSize - (paddingY * 2), 
+                        textWidth + (paddingX * 2), 
+                        fontSize + (paddingY * 2)
+                      );
+                      
+                      ctx.fillStyle = 'black';
+                      ctx.textAlign = 'right'; 
+                      ctx.textBaseline = 'bottom';
+                      ctx.fillText(text, size - paddingX, size - paddingY + (fontSize * 0.1));
+                  }
+                  resolve(canvas.toDataURL('image/png'));
+              };
+              
+              img.onerror = (err) => {
+                  reject(new Error("Gagal mengunduh QR dari API. Periksa koneksi atau batas limit."));
+              };
+          });
+      };
+
+      const imgFormat = templateImg.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+      const templateContainer = document.getElementById('master-template-container');
+      const previewWidthPx = templateContainer ? templateContainer.getBoundingClientRect().width : 800;
+
+      // --- TAMBAHAN OPTIMASI PDF: PRE-FETCH & CACHING ---
+      const uniqueIds = [...new Set(generatedQRs.map(item => item.id))];
+      const qrImageCache = {};
+
+      const batchLimit = 10;
+      for (let b = 0; b < uniqueIds.length; b += batchLimit) {
+        const batch = uniqueIds.slice(b, b + batchLimit);
+        await Promise.all(batch.map(async (id) => {
+           try {
+              const dataUrl = await generateQROnCanvas(id, `${window.location.origin}/?verify=${id}`, 300, printConfig.embedQrText);
+              qrImageCache[id] = dataUrl;
+           } catch (e) {
+              console.error(`Gagal fetch QR untuk ${id}`, e);
+           }
+        }));
+      }
+      // --- END OPTIMASI PDF ---
+
+      for (let i = 0; i < generatedQRs.length; i++) {
+        if (i > 0 && i % itemsPerPage === 0 && i !== 0) {
+          pdf.addPage(); 
+        }
+        
+        const indexOnPage = i % itemsPerPage;
+        const col = indexOnPage % cols;
+        const row = Math.floor(indexOnPage / cols);
+
+        let startX = Number(printConfig.marginX) || 0;
+        let startY = Number(printConfig.marginTop) || 0;
+
+        if (printConfig.autoCenter) {
+           const totalGridWidth = (cols * itemWidth) + ((cols - 1) * gapX);
+           startX = (pdfWidth - totalGridWidth) / 2;
+           
+           const itemsOnThisPage = Math.min(itemsPerPage, generatedQRs.length - (Math.floor(i / itemsPerPage) * itemsPerPage));
+           const rowsOnThisPage = Math.ceil(itemsOnThisPage / cols);
+           const totalGridHeight = (rowsOnThisPage * itemHeight) + ((rowsOnThisPage - 1) * gapY);
+           startY = (pdfHeight - totalGridHeight) / 2;
+        } else {
+           const totalGridWidth = (cols * itemWidth) + ((cols - 1) * gapX);
+           if (startX * 2 + totalGridWidth > pdfWidth) {
+             startX = Math.max(0, (pdfWidth - totalGridWidth) / 2);
+           }
+        }
+
+        const x = startX + (col * (itemWidth + gapX));
+        const y = startY + (row * (itemHeight + gapY));
+
+        pdf.addImage(templateImg, imgFormat, x, y, itemWidth, itemHeight, 'TEMPLATE_BG', 'FAST');
+
+        if (printConfig.showOutline) {
+           pdf.setDrawColor(200, 200, 200); 
+           pdf.setLineWidth(0.2); 
+           pdf.rect(x, y, itemWidth, itemHeight);
+        }
+
+        const currentId = generatedQRs[i].id;
+        const cachedQrImage = qrImageCache[currentId];
+
+        for (let posIdx = 0; posIdx < qrPositions.length; posIdx++) {
+           const pos = qrPositions[posIdx];
+           try {
+             if (cachedQrImage) {
+                 const qrMmWidth = itemWidth * (pos.size / 100);
+                 const qrMmX = x + (itemWidth * (pos.x / 100)) - (qrMmWidth / 2);
+                 const qrMmY = y + (itemHeight * (pos.y / 100)) - (qrMmWidth / 2);
+                 
+                 pdf.addImage(cachedQrImage, 'PNG', qrMmX, qrMmY, qrMmWidth, qrMmWidth, `QR_${currentId}`, 'FAST');
+             }
+           } catch (err) {
+             console.error("Gagal menempel QR Code di PDF", err);
+           }
+        }
+        
+        if (textPositions.length > 0 && generatedQRs[i]) {
+            pdf.setTextColor(0, 0, 0); 
+            pdf.setFont("helvetica", "bold");
+            
+            textPositions.forEach(pos => {
+                const fontScaleFactor = itemWidth / previewWidthPx;
+                const pxToPt = 2.83465;
+                const pdfFontSizePt = (previewWidthPx * (pos.size / 100)) * fontScaleFactor * pxToPt * 1.15; 
+                
+                pdf.setFontSize(pdfFontSizePt); 
+                const textX = x + (itemWidth * (pos.x / 100));
+                const textY = y + (itemHeight * (pos.y / 100));
+                pdf.text(generatedQRs[i].id, textX, textY, { align: "center", baseline: "middle" });
+            });
+        }
+      }
+      
+      pdf.save(`SealMaster_${batchIdToUse}.pdf`);
+      showNotification("PDF berhasil di-generate dan diunduh!", 'success');
+    } catch (error) {
+      console.error(error);
+      showNotification("Terjadi kesalahan sistem saat menyusun file PDF.", 'error');
+    } finally {
+      setIsGeneratingPDF(false);
+    }
+  };
+
+  const handleToggleBatchId = (id) => {
+    const newSelected = selectedBatchIds.includes(id) 
+      ? selectedBatchIds.filter(sid => sid !== id) 
+      : [...selectedBatchIds, id];
+      
+    setSelectedBatchIds(newSelected);
+    if (activeBatch) {
+      setGeneratedQRs(activeBatch.items.filter(item => newSelected.includes(item.id)));
+    }
+  };
+
+  const handleSelectAllBatchIds = () => { 
+      if (activeBatch) { 
+        setSelectedBatchIds(activeBatchUniqueIds); 
+        setGeneratedQRs(activeBatch.items); 
+      } 
+  };
+  
+  const handleDeselectAllBatchIds = () => { 
+      setSelectedBatchIds([]); 
+      setGeneratedQRs([]); 
+  };
+
+  // MULTI-QR DRAG & RESIZE
+  const handleDragStart = (e, index) => {
+    e.preventDefault(); 
+    const container = document.getElementById('master-template-container');
+    if (!container) return;
+    
+    const rect = container.getBoundingClientRect();
+    
+    const onMove = (mv) => {
+      let cx = mv.clientX ?? (mv.touches?.[0].clientX); 
+      let cy = mv.clientY ?? (mv.touches?.[0].clientY);
+      if (!cx || !cy) return;
+      
+      let newX = ((cx - rect.left) / rect.width) * 100; 
+      let newY = ((cy - rect.top) / rect.height) * 100;
+      
+      setQrPositions(prev => {
+        const updated = [...prev]; 
+        updated[index] = { 
+          ...updated[index], 
+          x: Math.max(0, Math.min(100, newX)), 
+          y: Math.max(0, Math.min(100, newY)) 
+        };
+        return updated;
+      });
+    };
+    
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove); 
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('touchmove', onMove); 
+      document.removeEventListener('touchend', onUp);
+    };
+    
+    document.addEventListener('mousemove', onMove); 
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('touchmove', onMove, { passive: false }); 
+    document.addEventListener('touchmove', onUp);
+  };
+
+  const handleResizeStart = (e, dirX, index) => {
+    e.preventDefault(); 
+    e.stopPropagation();
+    const container = document.getElementById('master-template-container');
+    if (!container) return;
+    
+    const rect = container.getBoundingClientRect();
+    const startX = e.clientX ?? (e.touches?.[0].clientX);
+    const startSize = qrPositions[index].size;
+    
+    const onMove = (mv) => {
+      let cx = mv.clientX ?? (mv.touches?.[0].clientX); 
+      if (!cx) return;
+      
+      const deltaX = cx - startX; 
+      const deltaPercent = ((deltaX * dirX) / rect.width) * 100 * 2;
+      
+      setQrPositions(prev => prev.map(p => ({ 
+        ...p, 
+        size: Math.max(5, Math.min(100, startSize + deltaPercent)) 
+      })));
+    };
+    
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove); 
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('touchmove', onMove); 
+      document.removeEventListener('touchend', onUp);
+    };
+    
+    document.addEventListener('mousemove', onMove); 
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('touchmove', onMove, { passive: false }); 
+    document.addEventListener('touchmove', onUp);
+  };
+
+  // TEKS ID DRAG & RESIZE
+  const handleTextDragStart = (e, index) => {
+    e.preventDefault(); 
+    const container = document.getElementById('master-template-container');
+    if (!container) return;
+    
+    const rect = container.getBoundingClientRect();
+    
+    const onMove = (mv) => {
+      let cx = mv.clientX ?? (mv.touches?.[0].clientX); 
+      let cy = mv.clientY ?? (mv.touches?.[0].clientY);
+      if (!cx || !cy) return;
+      
+      let newX = ((cx - rect.left) / rect.width) * 100; 
+      let newY = ((cy - rect.top) / rect.height) * 100;
+      
+      setTextPositions(prev => {
+        const updated = [...prev]; 
+        updated[index] = { 
+          ...updated[index], 
+          x: Math.max(0, Math.min(100, newX)), 
+          y: Math.max(0, Math.min(100, newY)) 
+        };
+        return updated;
+      });
+    };
+    
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove); 
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('touchmove', onMove); 
+      document.removeEventListener('touchend', onUp);
+    };
+    
+    document.addEventListener('mousemove', onMove); 
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('touchmove', onMove, { passive: false }); 
+    document.addEventListener('touchmove', onUp);
+  };
+
+  const handleTextResizeStart = (e, dirX, index) => {
+    e.preventDefault(); 
+    e.stopPropagation();
+    const container = document.getElementById('master-template-container');
+    if (!container) return;
+    
+    const rect = container.getBoundingClientRect();
+    const startX = e.clientX ?? (e.touches?.[0].clientX);
+    const startSize = textPositions[index].size;
+    
+    const onMove = (mv) => {
+      let cx = mv.clientX ?? (mv.touches?.[0].clientX); 
+      if (!cx) return;
+      
+      const deltaX = cx - startX; 
+      const deltaPercent = ((deltaX * dirX) / rect.width) * 100 * 2;
+      
+      setTextPositions(prev => prev.map(p => ({ 
+        ...p, 
+        size: Math.max(0.5, Math.min(100, startSize + deltaPercent)) 
+      })));
+    };
+    
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove); 
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('touchmove', onMove); 
+      document.removeEventListener('touchend', onUp);
+    };
+    
+    document.addEventListener('mousemove', onMove); 
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('touchmove', onMove, { passive: false }); 
+    document.addEventListener('touchmove', onUp);
+  };
+
+  const addTextPosition = () => {
+    setTextPositions([...textPositions, { id: Date.now(), x: 50, y: 80, size: 4 }]);
+  };
+  
+  const removeTextPosition = (id) => {
+    setTextPositions(textPositions.filter(pos => pos.id !== id));
+  };
+
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) { 
+        const reader = new FileReader(); 
+        reader.onload = (event) => setTemplateImg(event.target.result); 
+        reader.readAsDataURL(file); 
+    }
+  };
+
+  return (
+    <div className="animate-in fade-in duration-300">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        {/* PANEL KIRI (PENGATURAN) */}
+        <div className="lg:col-span-4 space-y-5">
+          
+          <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200/60">
+            <h2 className="font-bold text-slate-800 flex items-center gap-2 mb-4 border-b pb-3">
+              <span className="bg-blue-100 text-blue-700 w-6 h-6 flex items-center justify-center rounded-full text-xs">1</span> 
+              Unggah Template Stiker
+            </h2>
+            <input 
+              type="file" 
+              accept="image/*" 
+              onChange={handleImageUpload}
+              className="block w-full text-sm text-slate-500 file:mr-4 file:py-2.5 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-bold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
+            />
+          </div>
+
+          {previewBatchId ? (
+            <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200/60 animate-in fade-in duration-300">
+              <h2 className="font-bold text-slate-800 flex items-center gap-2 mb-4 border-b pb-3">
+                <span className="bg-blue-100 text-blue-700 w-6 h-6 flex items-center justify-center rounded-full text-xs">2</span> 
+                Pilih ID untuk Dicetak
+              </h2>
+              
+              <div className="mb-3 flex justify-between items-center px-1">
+                <span className="text-[11px] text-slate-500 font-bold uppercase tracking-wider">
+                  Terpilih: {selectedBatchIds.length} / {activeBatchUniqueIds.length}
+                </span>
+                <div className="flex gap-2">
+                  <button onClick={handleSelectAllBatchIds} className="text-[11px] text-blue-600 hover:text-blue-800 font-bold">Semua</button>
+                  <span className="text-gray-300">|</span>
+                  <button onClick={handleDeselectAllBatchIds} className="text-[11px] text-blue-600 hover:text-blue-800 font-bold">Kosong</button>
+                </div>
+              </div>
+              
+              <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-xl p-2 space-y-1.5 bg-slate-50 custom-scrollbar">
+                {activeBatchUniqueIds.map(id => (
+                   <label 
+                     key={id} 
+                     className={`flex items-center gap-3 cursor-pointer p-2.5 rounded-lg border transition-all ${
+                       selectedBatchIds.includes(id) ? 'bg-blue-50 border-blue-200' : 'bg-white border-slate-100 hover:border-blue-200'
+                     }`}
+                   >
+                     <input 
+                       type="checkbox" 
+                       checked={selectedBatchIds.includes(id)} 
+                       onChange={() => handleToggleBatchId(id)} 
+                       className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer" 
+                     />
+                     <span className="text-sm font-mono text-slate-700 font-bold">{id}</span>
+                   </label>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200/60 animate-in fade-in duration-300">
+              <h2 className="font-bold text-slate-800 flex items-center gap-2 mb-4 border-b pb-3">
+                <span className="bg-blue-100 text-blue-700 w-6 h-6 flex items-center justify-center rounded-full text-xs">2</span> 
+                Parameter Stok Baru
+              </h2>
+              
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">Prefix</label>
+                  <input 
+                    type="text" 
+                    value={inputPrefix} 
+                    onChange={(e) => setInputPrefix(e.target.value)} 
+                    className="w-full px-3 py-2 text-sm font-semibold border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" 
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">Mulai Dari</label>
+                  <input 
+                    type="number" 
+                    value={startNum} 
+                    onChange={(e) => setStartNum(parseInt(e.target.value) || 1)} 
+                    className="w-full px-3 py-2 text-sm font-semibold border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" 
+                  />
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4 mb-5">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">Total ID Berbeda</label>
+                  <input 
+                    type="number" 
+                    min="1" 
+                    value={count} 
+                    onChange={(e) => setCount(parseInt(e.target.value) || 1)} 
+                    className="w-full px-3 py-2 text-sm font-semibold border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" 
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">Salinan per ID</label>
+                  <input 
+                    type="number" 
+                    min="1" 
+                    value={copiesPerId} 
+                    onChange={(e) => setCopiesPerId(Math.max(1, parseInt(e.target.value) || 1))} 
+                    className="w-full px-3 py-2 text-sm font-semibold border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" 
+                  />
+                </div>
+              </div>
+              
+              <button 
+                onClick={handleBulkGenerate} 
+                className="w-full bg-[#146b99] text-white py-3 text-sm font-bold rounded-xl hover:bg-[#11577c] transition-colors flex items-center justify-center gap-2"
+              >
+                <PlusCircle size={18} /> Tampilkan Pratinjau
+              </button>
+            </div>
+          )}
+
+          <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200/60">
+            <h2 className="font-bold text-slate-800 flex items-center gap-2 mb-4 border-b pb-3">
+              <span className="bg-blue-100 text-blue-700 w-6 h-6 flex items-center justify-center rounded-full text-xs">3</span> 
+              Pengaturan Cetak
+            </h2>
+            
+            <div className="mb-4 bg-blue-50 border border-blue-100 p-3 rounded-lg">
+               <p className="text-[11px] font-bold text-blue-800 uppercase mb-2">Ukuran Fisik Stiker (Presisi MM)</p>
+               <div className="grid grid-cols-2 gap-3">
+                 <div>
+                   <label className="block text-[10px] font-bold text-gray-500 mb-1">Lebar Kertas (mm)</label>
+                   <input 
+                     type="number" 
+                     value={printConfig.widthMm} 
+                     onChange={(e) => setPrintConfig({...printConfig, widthMm: Number(e.target.value)})} 
+                     className="w-full p-1.5 text-sm font-semibold border rounded bg-white outline-blue-400 focus:border-blue-500" 
+                 />
+                 </div>
+                 <div>
+                   <label className="block text-[10px] font-bold text-gray-500 mb-1">Tinggi Kertas (mm)</label>
+                   <input 
+                     type="number" 
+                     value={printConfig.heightMm} 
+                     onChange={(e) => setPrintConfig({...printConfig, heightMm: Number(e.target.value)})} 
+                     className="w-full p-1.5 text-sm font-semibold border rounded bg-white outline-blue-400 focus:border-blue-500" 
+                   />
+                 </div>
+               </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Kertas Target</label>
+                <select 
+                  value={printConfig.paper} 
+                  onChange={(e) => setPrintConfig({...printConfig, paper: e.target.value})} 
+                  className="w-full px-3 py-2 text-sm font-semibold border border-slate-300 rounded-lg bg-slate-50 outline-none focus:border-blue-500"
+                >
+                  <option value="A4">A4</option>
+                  <option value="A5">A5</option>
+                  <option value="A3">A3</option>
+                  <option value="Letter">Letter</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Orientasi</label>
+                <select 
+                  value={printConfig.orientation} 
+                  onChange={(e) => setPrintConfig({...printConfig, orientation: e.target.value})} 
+                  className="w-full px-3 py-2 text-sm font-semibold border border-slate-300 rounded-lg bg-slate-50 outline-none focus:border-blue-500"
+                >
+                  <option value="landscape">Landscape</option>
+                  <option value="portrait">Portrait</option>
+                </select>
+              </div>
+            </div>
+            
+            <div className="mb-4">
+                <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">Kolom per Baris (Layout)</label>
+                <select 
+                  value={printConfig.cols} 
+                  onChange={(e) => setPrintConfig({...printConfig, cols: parseInt(e.target.value)})} 
+                  className="w-full px-3 py-2 text-sm font-semibold border border-slate-300 rounded-lg bg-slate-50 outline-none focus:border-blue-500"
+                >
+                  <option value="1">1 Kolom</option>
+                  <option value="2">2 Kolom</option>
+                  <option value="3">3 Kolom</option>
+                  <option value="4">4 Kolom</option>
+                  <option value="5">5 Kolom</option>
+                </select>
+            </div>
+            
+            <div className="mb-4 border-t border-slate-200 pt-4 space-y-4">
+              <label className="flex items-start gap-3 cursor-pointer group">
+                <div className="mt-0.5">
+                  <input 
+                    type="checkbox" 
+                    checked={printConfig.autoCenter} 
+                    onChange={(e) => setPrintConfig({...printConfig, autoCenter: e.target.checked})} 
+                    className="w-4 h-4 text-[#146b99] rounded border-gray-300 focus:ring-[#146b99] cursor-pointer" 
+                  />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-gray-800">Auto Center (Tengah Otomatis)</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5 leading-tight">Menempatkan posisi cetak stiker otomatis tepat di tengah PDF (mengabaikan margin luar).</p>
+                </div>
+              </label>
+            </div>
+
+            {!printConfig.autoCenter && (
+              <div className="mb-4 bg-slate-50 p-3 rounded-xl border border-slate-200/60">
+                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 border-b border-slate-200 pb-1">Margin Kertas Luar (mm)</p>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[10px] text-slate-500 mb-1 font-semibold">Atas</label>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      value={printConfig.marginTop} 
+                      onChange={(e) => setPrintConfig({...printConfig, marginTop: e.target.value})} 
+                      className="w-full px-2 py-1.5 text-sm font-semibold border border-slate-300 rounded bg-white outline-none focus:border-blue-500" 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-500 mb-1 font-semibold">Bawah</label>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      value={printConfig.marginBottom} 
+                      onChange={(e) => setPrintConfig({...printConfig, marginBottom: e.target.value})} 
+                      className="w-full px-2 py-1.5 text-sm font-semibold border border-slate-300 rounded bg-white outline-none focus:border-blue-500" 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-500 mb-1 font-semibold">Samping</label>
+                    <input 
+                      type="number" 
+                      min="0" 
+                      value={printConfig.marginX} 
+                      onChange={(e) => setPrintConfig({...printConfig, marginX: e.target.value})} 
+                      className="w-full px-2 py-1.5 text-sm font-semibold border border-slate-300 rounded bg-white outline-none focus:border-blue-500" 
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="mb-6 bg-slate-50 p-3 rounded-xl border border-slate-200/60">
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 border-b border-slate-200 pb-1">Jarak Antar Stiker (mm)</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                   <label className="block text-[10px] text-slate-500 mb-1 font-semibold">Vertikal</label>
+                   <input 
+                     type="number" 
+                     min="0" 
+                     value={printConfig.gapY} 
+                     onChange={(e) => setPrintConfig({...printConfig, gapY: e.target.value})} 
+                     className="w-full px-2 py-1.5 text-sm font-semibold border border-slate-300 rounded bg-white outline-none focus:border-blue-500" 
+                   />
+                </div>
+                <div className={printConfig.cols === 1 ? 'opacity-50' : ''}>
+                   <label className="block text-[10px] text-slate-500 mb-1 font-semibold">Horizontal</label>
+                   <input 
+                     type="number" 
+                     min="0" 
+                     value={printConfig.gapX} 
+                     onChange={(e) => setPrintConfig({...printConfig, gapX: e.target.value})} 
+                     disabled={printConfig.cols === 1} 
+                     className="w-full px-2 py-1.5 text-sm font-semibold border border-slate-300 rounded bg-white outline-none focus:border-blue-500 disabled:bg-gray-100" 
+                   />
+                </div>
+              </div>
+            </div>
+
+            <div className="mb-6 border-t border-slate-200 pt-4 space-y-4">
+              <label className="flex items-start gap-3 cursor-pointer group">
+                <div className="mt-0.5">
+                  <input 
+                    type="checkbox" 
+                    checked={printConfig.showOutline} 
+                    onChange={(e) => setPrintConfig({...printConfig, showOutline: e.target.checked})} 
+                    className="w-4 h-4 text-[#146b99] rounded border-gray-300 focus:ring-[#146b99] cursor-pointer" 
+                  />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-gray-800">Garis Tepi (Outline)</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5 leading-tight">Menambahkan garis tepi abu-abu tipis pada setiap stiker.</p>
+                </div>
+              </label>
+
+              <label className="flex items-start gap-3 cursor-pointer group">
+                <div className="mt-0.5">
+                  <input 
+                    type="checkbox" 
+                    checked={printConfig.embedQrText} 
+                    onChange={(e) => setPrintConfig({...printConfig, embedQrText: e.target.checked})} 
+                    className="w-4 h-4 text-[#146b99] rounded border-gray-300 focus:ring-[#146b99] cursor-pointer" 
+                  />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-gray-800">Teks ID Kecil (Dalam QR)</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5 leading-tight">Mencetak ID berukuran sangat kecil yang menempel di pojok gambar QR Code.</p>
+                </div>
+              </label>
+            </div>
+
+            <button 
+              onClick={handleGenerateQR} 
+              disabled={generatedQRs.length === 0 || isGeneratingPDF} 
+              className={`w-full text-white py-3.5 text-sm font-bold rounded-xl disabled:opacity-50 transition flex items-center justify-center gap-2 ${
+                previewBatchId ? 'bg-[#76b539] hover:bg-[#69a132]' : 'bg-[#8dc63f] hover:bg-[#7bc025]'
+              }`}
+            >
+              {isGeneratingPDF ? (
+                <><Loader2 size={18} className="animate-spin" /> Menyiapkan QR & PDF...</>
+              ) : previewBatchId ? (
+                <><Download size={18} /> Unduh PDF Batch</>
+              ) : (
+                <><Download size={18} /> Simpan sebagai PDF</>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* PANEL KANAN (PREVIEW & AREA CETAK) */}
+        <div className="lg:col-span-8 flex flex-col gap-6">
+          
+          {previewBatchId && (
+            <div className="bg-blue-50 border border-blue-200 p-5 rounded-2xl flex items-start gap-4 animate-in fade-in">
+               <Info className="text-blue-600 mt-1 shrink-0" size={24} />
+               <div>
+                 <h3 className="font-bold text-blue-900 text-base">Mode Pratinjau Histori ({previewBatchId})</h3>
+                 <p className="text-sm text-blue-700 mt-1">
+                   Gunakan panel <b>Langkah 2</b> di sebelah kiri untuk menyeleksi spesifik ID mana saja yang ingin Anda cetak ulang.
+                 </p>
+               </div>
+            </div>
+          )}
+
+          {/* MASTER TEMPLATE MULTI-QR */}
+          {templateImg && (
+            <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-200/60 overflow-hidden">
+              <div className="flex justify-between items-center mb-2 border-b border-slate-100 pb-3">
+                 <h2 className="font-bold text-slate-800 text-lg">Penyesuaian Posisi Visual</h2>
+                 <div className="flex gap-2">
+                   <button 
+                     onClick={addQrPosition} 
+                     className="bg-blue-50 text-[#146b99] hover:bg-blue-100 text-[11px] font-bold px-3 py-1.5 rounded-md flex items-center gap-1.5 transition border border-blue-200"
+                   >
+                     <Plus size={14} strokeWidth={3} /> Tambah QR
+                   </button>
+                   <button 
+                     onClick={addTextPosition} 
+                     className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-[11px] font-bold px-3 py-1.5 rounded-md flex items-center gap-1.5 transition border border-emerald-200"
+                   >
+                     <Type size={14} strokeWidth={3} /> Tambah Teks ID
+                   </button>
+                 </div>
+              </div>
+              <p className="text-[10px] text-gray-500 mb-4 italic">*Geser kotak QR Code (dan Teks ID) di bawah ini untuk mengatur tata letaknya.</p>
+              
+              <div 
+                id="master-template-container" 
+                className="relative w-full border-2 border-dashed border-slate-300 rounded-lg overflow-hidden bg-slate-50" 
+                style={{ aspectRatio: `${printConfig.widthMm} / ${printConfig.heightMm}` }}
+              >
+                <img 
+                  src={templateImg} 
+                  alt="Master Template" 
+                  className="absolute inset-0 w-full h-full object-contain block pointer-events-none" 
+                />
+                
+                {qrPositions.map((pos, index) => (
+                  <div 
+                    key={pos.id} 
+                    className="absolute bg-white p-1 rounded shadow-xl cursor-move ring-2 ring-transparent hover:ring-blue-500 transition-shadow touch-none z-10 group" 
+                    style={{ left: `${pos.x}%`, top: `${pos.y}%`, width: `${pos.size}%`, transform: 'translate(-50%, -50%)' }} 
+                    onMouseDown={(e) => handleDragStart(e, index)} 
+                    onTouchStart={(e) => handleDragStart(e, index)}
+                  >
+                     <CustomQRCodeWithID 
+                       displayValue={`${inputPrefix}XXXXX`} 
+                       qrPayload={`${window.location.origin}/?verify=${inputPrefix}XXXXX`} 
+                       size={300} 
+                       showText={printConfig.embedQrText} 
+                     />
+                     
+                     {qrPositions.length > 1 && (
+                       <button 
+                         onClick={(e) => { e.stopPropagation(); removeQrPosition(pos.id); }} 
+                         className="absolute -top-3 -right-3 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity z-20 hover:scale-110"
+                       >
+                         <X size={12} strokeWidth={3} />
+                       </button>
+                     )}
+                     
+                     <div 
+                       className="absolute -top-2.5 -left-2.5 w-5 h-5 bg-[#146b99] border-[2px] border-white rounded-full cursor-nw-resize shadow-md flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" 
+                       onMouseDown={(e) => handleResizeStart(e, -1, index)} 
+                       onTouchStart={(e) => handleResizeStart(e, -1, index)} 
+                     />
+                     <div 
+                       className="absolute -top-2.5 -right-2.5 w-5 h-5 bg-[#146b99] border-[2px] border-white rounded-full cursor-ne-resize shadow-md flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" 
+                       onMouseDown={(e) => handleResizeStart(e, 1, index)} 
+                       onTouchStart={(e) => handleResizeStart(e, 1, index)} 
+                     />
+                     <div 
+                       className="absolute -bottom-2.5 -left-2.5 w-5 h-5 bg-[#146b99] border-[2px] border-white rounded-full cursor-sw-resize shadow-md flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" 
+                       onMouseDown={(e) => handleResizeStart(e, -1, index)} 
+                       onTouchStart={(e) => handleResizeStart(e, -1, index)} 
+                     />
+                     <div 
+                       className="absolute -bottom-2.5 -right-2.5 w-5 h-5 bg-[#146b99] border-[2px] border-white rounded-full cursor-se-resize shadow-md flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" 
+                       onMouseDown={(e) => handleResizeStart(e, 1, index)} 
+                       onTouchStart={(e) => handleResizeStart(e, 1, index)} 
+                     />
+                  </div>
+                ))}
+
+                {textPositions.map((pos, index) => (
+                  <div 
+                    key={pos.id} 
+                    className="absolute bg-white/90 px-2 py-0.5 rounded shadow-md cursor-move hover:ring-2 hover:ring-emerald-500 transition-shadow touch-none z-20 whitespace-nowrap text-center group" 
+                    style={{ 
+                      left: `${pos.x}%`, 
+                      top: `${pos.y}%`, 
+                      transform: 'translate(-50%, -50%)', 
+                      fontSize: `${pos.size}cqw`, 
+                      fontWeight: 'bold', 
+                      color: 'black', 
+                      border: '1px dashed transparent' 
+                    }} 
+                    onMouseDown={(e) => handleTextDragStart(e, index)} 
+                    onTouchStart={(e) => handleTextDragStart(e, index)} 
+                    title="Geser label ID ini"
+                  >
+                    {inputPrefix}XXXXX
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); removeTextPosition(pos.id); }} 
+                      className="absolute -top-3 -right-3 bg-red-500 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity z-30 hover:scale-110"
+                    >
+                      <X size={10} strokeWidth={3} />
+                    </button>
+                    
+                    <div 
+                      className="absolute -top-2.5 -left-2.5 w-5 h-5 bg-emerald-600 border-[2px] border-white rounded-full cursor-nw-resize shadow-md flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" 
+                      onMouseDown={(e) => handleTextResizeStart(e, -1, index)} 
+                      onTouchStart={(e) => handleTextResizeStart(e, -1, index)} 
+                    />
+                    <div 
+                      className="absolute -top-2.5 -right-2.5 w-5 h-5 bg-emerald-600 border-[2px] border-white rounded-full cursor-ne-resize shadow-md flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" 
+                      onMouseDown={(e) => handleTextResizeStart(e, 1, index)} 
+                      onTouchStart={(e) => handleTextResizeStart(e, 1, index)} 
+                    />
+                    <div 
+                      className="absolute -bottom-2.5 -left-2.5 w-5 h-5 bg-emerald-600 border-[2px] border-white rounded-full cursor-sw-resize shadow-md flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" 
+                      onMouseDown={(e) => handleTextResizeStart(e, -1, index)} 
+                      onTouchStart={(e) => handleTextResizeStart(e, -1, index)} 
+                    />
+                    <div 
+                      className="absolute -bottom-2.5 -right-2.5 w-5 h-5 bg-emerald-600 border-[2px] border-white rounded-full cursor-se-resize shadow-md flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" 
+                      onMouseDown={(e) => handleTextResizeStart(e, 1, index)} 
+                      onTouchStart={(e) => handleTextResizeStart(e, 1, index)} 
+                    />
+                  </div>
+                ))}
+
+                {printConfig.showOutline && (
+                  <div className="absolute inset-0 border border-gray-400 pointer-events-none z-10"></div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* AREA CETAK (PRINT CONTAINER) */}
+          <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-200/60 flex-1">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-6 gap-3">
+              <div>
+                <h2 className="font-bold text-slate-800 text-lg flex items-center gap-2">
+                  <ShieldCheck size={20} className="text-green-500" /> 
+                  Area Pratinjau 
+                  <span className="text-xs font-bold text-gray-600 bg-slate-100 px-2 py-1 rounded ml-1">
+                    {generatedQRs.length} Stiker
+                  </span>
+                </h2>
+                <p className="text-[10px] text-slate-400 mt-1 italic">*Tampilan ini hanya visualisasi data. Akurasi cetak dapat dilihat di PDF hasil unduhan.</p>
+              </div>
+              {generatedQRs.length > 0 && (
+                 <button 
+                   onClick={() => { setGeneratedQRs([]); setPreviewBatchId(null); setSelectedBatchIds([]); }} 
+                   className="text-red-500 font-bold text-sm hover:bg-red-50 px-3 py-1.5 rounded-lg flex items-center gap-1 transition self-start sm:self-auto shrink-0"
+                 >
+                    <Trash2 size={16} /> Batal & Kosongkan
+                 </button>
+              )}
+            </div>
+
+            {generatedQRs.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-64 text-slate-400 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                <Printer size={48} className="mb-3 text-slate-300" strokeWidth={1.5} />
+                <p className="font-bold text-slate-500">Area Kosong.</p>
+                <p className="text-sm font-medium mt-1">Silakan generate data atau pilih ID di panel kiri.</p>
+              </div>
+            ) : (
+              <div className="max-h-[700px] overflow-y-auto bg-slate-50 rounded-xl p-2 border border-slate-100 custom-scrollbar">
+                <div 
+                  className="print-container" 
+                  style={{ display: 'grid', gridTemplateColumns: `repeat(${printConfig.cols}, minmax(0, 1fr))`, gap: '10px' }}
+                >
+                  {generatedQRs.map((item, index) => (
+                    <div 
+                      key={index} 
+                      className="stiker-item relative bg-white border border-slate-200 overflow-hidden flex items-center justify-center shadow-sm" 
+                      style={{ aspectRatio: `${printConfig.widthMm} / ${printConfig.heightMm}`, width: '100%' }}
+                    >
+                      {templateImg ? (
+                        <img 
+                          src={templateImg} 
+                          alt="Template" 
+                          className="absolute inset-0 w-full h-full object-contain block pointer-events-none" 
+                        />
+                      ) : (
+                        <div className="absolute inset-0 bg-slate-100 flex items-center justify-center text-slate-400 text-xs italic">
+                          [Tanpa Template]
+                        </div>
+                      )}
+                      
+                      {qrPositions.map((pos) => (
+                         <div 
+                           key={pos.id} 
+                           className="absolute bg-white p-[2px] rounded-sm pointer-events-none" 
+                           style={{ left: `${pos.x}%`, top: `${pos.y}%`, width: `${pos.size}%`, transform: 'translate(-50%, -50%)' }}
+                         >
+                            <CustomQRCodeWithID 
+                              displayValue={item.id} 
+                              qrPayload={`${window.location.origin}/?verify=${item.id}`} 
+                              size={250} 
+                              showText={printConfig.embedQrText} 
+                            />
+                         </div>
+                      ))}
+
+                      {textPositions.map((pos) => (
+                        <div 
+                          key={pos.id} 
+                          className="absolute whitespace-nowrap text-center" 
+                          style={{ left: `${pos.x}%`, top: `${pos.y}%`, transform: 'translate(-50%, -50%)', fontSize: `${pos.size}cqw`, fontWeight: 'bold', color: 'black' }}
+                        >
+                          {item.id}
+                        </div>
+                      ))}
+
+                      {printConfig.showOutline && (
+                        <div className="absolute inset-0 border border-gray-400 pointer-events-none z-10"></div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
+// KOMPONEN HALAMAN: VIEW HISTORI GENERATOR
+// ============================================================================
+const ViewHistoriGenerator = ({ 
+  dbClient, 
+  generateHistory, 
+  setGenerateHistory, 
+  installedSeals, 
+  setActiveMenu, 
+  setPreviewBatchId, 
+  setGeneratedQRs, 
+  setSelectedBatchIds,
+  showNotification,
+  showConfirm
+}) => {
+  const [historiSearch, setHistoriSearch] = useState('');
+  const [historiEntries, setHistoriEntries] = useState(10);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Reset ke halaman 1 jika user melakukan pencarian atau mengubah jumlah entri
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [historiSearch, historiEntries]);
+
+  const filteredHistory = generateHistory.filter(batch => 
+    String(batch?.id || '').toLowerCase().includes(String(historiSearch).toLowerCase()) ||
+    String(batch?.prefix || '').toLowerCase().includes(String(historiSearch).toLowerCase())
+  );
+  
+  const totalPages = Math.ceil(filteredHistory.length / historiEntries) || 1;
+  const startIndex = (currentPage - 1) * historiEntries;
+  const displayedHistory = filteredHistory.slice(startIndex, startIndex + historiEntries);
+
+  const handleDeleteBatch = async (batchId) => {
+    showConfirm('Yakin ingin menghapus histori ini? Semua ID segel akan ditarik.', async () => {
+       if (dbClient) {
+           const { error } = await dbClient.from('generate_history').delete().eq('id', batchId);
+           if (error) {
+              return showNotification("Gagal menghapus data dari Supabase.", 'error');
+           }
+       }
+       setGenerateHistory(generateHistory.filter(b => b.id !== batchId));
+       showNotification("Histori berhasil dihapus.", 'success');
+    });
+  };
+
+  const handleViewBatch = (batch) => {
+    setSelectedBatchIds([...new Set(batch.items.map(item => item.id))]);
+    setGeneratedQRs(batch.items); 
+    setPreviewBatchId(batch.id); 
+    setActiveMenu('generator');
+  };
+
+  return (
+    <div className="animate-in fade-in duration-300">
+      <div className="mb-5">
+         <h2 className="text-2xl font-bold text-gray-800">Daftar Histori Generate QR</h2>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-4 border-b border-gray-200 flex flex-col sm:flex-row sm:justify-between items-start sm:items-center gap-4 bg-white">
+           <div className="flex items-center gap-2">
+              <select 
+                value={historiEntries} 
+                onChange={(e) => setHistoriEntries(Number(e.target.value))} 
+                className="border border-gray-300 rounded-md px-3 py-1.5 text-sm text-gray-600 outline-none focus:border-[#146b99] cursor-pointer"
+              >
+                 <option value={10}>10</option>
+                 <option value={25}>25</option>
+                 <option value={50}>50</option>
+                 <option value={100}>100</option>
+              </select>
+              <span className="text-sm text-gray-500 font-medium">entri per halaman</span>
+           </div>
+           
+           <div className="relative w-full sm:w-auto">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input 
+                type="text" 
+                placeholder="Cari ID Batch..." 
+                value={historiSearch} 
+                onChange={(e) => setHistoriSearch(e.target.value)} 
+                className="pl-9 pr-4 py-1.5 border border-gray-300 rounded-md text-sm outline-none focus:border-[#146b99] w-full sm:w-64" 
+              />
+           </div>
+        </div>
+
+        <div className="overflow-x-auto min-h-[400px] custom-scrollbar">
+          <table className="w-full text-left border-collapse min-w-[700px]">
+            <thead className="bg-[#156592] text-white text-[11px] uppercase tracking-wider">
+              <tr>
+                <th className="px-6 py-4 font-bold whitespace-nowrap">ID Batch</th>
+                <th className="px-6 py-4 font-bold whitespace-nowrap">Waktu Generate</th>
+                <th className="px-6 py-4 font-bold whitespace-nowrap">Rentang ID</th>
+                <th className="px-6 py-4 font-bold whitespace-nowrap">Spesifikasi</th>
+                <th className="px-6 py-4 font-bold text-center whitespace-nowrap">Detail</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {displayedHistory.length === 0 ? (
+                <tr>
+                  <td colSpan="5" className="p-8 text-center text-gray-400 font-bold text-sm">
+                    Belum ada histori.
+                  </td>
+                </tr>
+              ) : (
+                displayedHistory.map((batch) => (
+                  <tr key={batch.id} className="hover:bg-gray-50/50 transition-colors">
+                    <td className="px-6 py-4 font-mono font-extrabold text-[#156592] whitespace-nowrap">{batch.id}</td>
+                    <td className="px-6 py-4 text-sm font-semibold text-gray-700 whitespace-nowrap">{batch.date}</td>
+                    <td className="px-6 py-4 text-sm text-gray-800 font-mono font-bold whitespace-nowrap">
+                      {batch.prefix}{String(batch.start).padStart(5,'0')} - {batch.prefix}{String(batch.end).padStart(5,'0')}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-700 whitespace-nowrap">
+                      <div className="flex flex-col gap-0.5">
+                        <span className="font-extrabold">{batch.count} ID Unik</span>
+                        <span className="text-xs font-semibold text-gray-400">@{batch.copies} Salinan / ID</span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-center whitespace-nowrap">
+                      <div className="flex justify-center gap-3">
+                        <button 
+                          onClick={() => handleViewBatch(batch)} 
+                          className="text-xs font-bold text-gray-400 hover:text-[#156592] transition-colors"
+                        >
+                          LIHAT
+                        </button>
+                        <button 
+                          onClick={() => handleDeleteBatch(batch.id)} 
+                          className="text-xs font-bold text-gray-400 hover:text-red-500 transition-colors"
+                        >
+                          HAPUS
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+        
+        {/* FITUR PAGINATION (HALAMAN) BAWAH */}
+        <div className="p-4 border-t border-gray-200 flex flex-col sm:flex-row justify-between items-center gap-4 bg-white text-sm">
+          <div className="text-gray-500 font-medium text-xs sm:text-sm">
+            Menampilkan <span className="font-bold text-gray-800">{filteredHistory.length === 0 ? 0 : startIndex + 1}</span> hingga <span className="font-bold text-gray-800">{Math.min(startIndex + historiEntries, filteredHistory.length)}</span> dari <span className="font-bold text-gray-800">{filteredHistory.length}</span> entri
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-xs font-bold uppercase">
+              Prev
+            </button>
+            {Array.from({ length: totalPages }, (_, i) => i + 1)
+              .filter(p => p === 1 || p === totalPages || Math.abs(currentPage - p) <= 1)
+              .map((p, index, array) => (
+                <React.Fragment key={p}>
+                  {index > 0 && p - array[index - 1] > 1 && <span className="px-2 text-gray-400">...</span>}
+                  <button onClick={() => setCurrentPage(p)} className={`min-w-[32px] py-1.5 rounded-lg border ${currentPage === p ? 'bg-[#146b99] text-white border-[#146b99] font-bold' : 'bg-transparent border-transparent text-gray-600 hover:bg-gray-100'} transition-colors font-semibold`}>
+                    {p}
+                  </button>
+                </React.Fragment>
+            ))}
+            <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-xs font-bold uppercase">
+              Next
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
+// KOMPONEN HALAMAN: VIEW INPUT DATA SEAL
+// ============================================================================
+const ViewInputData = ({ 
+  currentUser, 
+  dbClient, 
+  generateHistory, 
+  installedSeals, 
+  setInstalledSeals, 
+  setActiveMenu,
+  showNotification
+}) => {
+  const [installForm, setInstallForm] = useState({ 
+    location: currentUser.department, 
+    pic: currentUser.name, 
+    nopol: '' 
+  });
+  
+  const initialSealInputs = {
+    gps: { id: '', type: 'Segel Pecah Telur', name: 'GPS', isDouble: false, id2: '', type2: 'Segel Pecah Telur', isNone: false, photo: null },
+    mdvr: { id: '', type: 'Segel Pecah Telur', name: 'MDVR', isDouble: false, id2: '', type2: 'Segel Pecah Telur', isNone: false, photo: null },
+    dsm: { id: '', type: 'Segel Pecah Telur', name: 'DSM', isDouble: false, id2: '', type2: 'Segel Pecah Telur', isNone: false, photo: null },
+    ch3: { id: '', type: 'Segel Pecah Telur', name: 'CH 3 (Menghadap Depan)', isDouble: false, id2: '', type2: 'Segel Pecah Telur', isNone: false, photo: null },
+    ch1: { id: '', type: 'Segel Pecah Telur', name: 'CH 1 (Kamera Kanan)', isDouble: false, id2: '', type2: 'Segel Pecah Telur', isNone: false, photo: null },
+    ch2: { id: '', type: 'Segel Pecah Telur', name: 'CH 2 (Kamera Kiri)', isDouble: false, id2: '', type2: 'Segel Pecah Telur', isNone: false, photo: null },
+  };
+  
+  const [sealInputs, setSealInputs] = useState(initialSealInputs);
+  const [isUploading, setIsUploading] = useState(false); 
+  const [openDropdown, setOpenDropdown] = useState(null);
+  const [dropdownSearch, setDropdownSearch] = useState('');
+  
+  const sealDropdownRef = useRef(null);
+  const [scannerModal, setScannerModal] = useState({ isOpen: false, category: null, slot: null });
+
+  // Custom Scanner Refs (Sama dengan ViewScanner)
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const streamRef = useRef(null);
+  const animationRef = useRef(null);
+  const activeScanRef = useRef(false);
+
+  const [cameras, setCameras] = useState([]);
+  const [currentCamIndex, setCurrentCamIndex] = useState(0);
+
+  // Cleanup scanner jika unmount
+  useEffect(() => {
+    return () => {
+      stopInputScanner();
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (sealDropdownRef.current && !sealDropdownRef.current.contains(event.target)) {
+        setOpenDropdown(null);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const uniqueGeneratedIds = [...new Set(generateHistory.flatMap(batch => (batch.items || []).map(item => item?.id).filter(Boolean)))];
+
+  const handleCategoryPhotoUpload = (e, key) => {
+    const file = e.target.files[0];
+    if (file) {
+       const reader = new FileReader();
+       reader.onload = (event) => {
+           setSealInputs(prev => ({ 
+             ...prev, 
+             [key]: { ...prev[key], photo: event.target.result } 
+           }));
+       };
+       reader.readAsDataURL(file);
+    }
+  };
+
+  const updateSealInput = (key, field, value) => {
+    setSealInputs(prev => ({ 
+      ...prev, 
+      [key]: { ...prev[key], [field]: value } 
+    }));
+  };
+
+  const isFormValid = () => {
+    if (!installForm.location || !installForm.pic || !installForm.nopol) {
+      return false;
+    }
+    
+    const categories = Object.keys(sealInputs);
+    const activeCats = categories.filter(c => !sealInputs[c].isNone);
+    if (activeCats.length === 0) return false; 
+
+    for (let cat of activeCats) {
+      const data = sealInputs[cat];
+      if (!data.id) return false;
+      if (!data.photo) return false; 
+      if (data.isDouble && !data.id2) return false;
+    }
+    return true;
+  };
+
+  const getAvailableIdsFor = (categoryKey, isSecondSlot = false) => {
+    const currentType = isSecondSlot ? sealInputs[categoryKey].type2 : sealInputs[categoryKey].type;
+    const usedInForm = [];
+    
+    Object.entries(sealInputs).forEach(([key, val]) => {
+      if (!val.isNone) {
+        if (key !== categoryKey || isSecondSlot) {
+          if (val.id && val.type === currentType) usedInForm.push(val.id);
+        }
+        if (key !== categoryKey || !isSecondSlot) {
+          if (val.isDouble && val.id2 && val.type2 === currentType) usedInForm.push(val.id2);
+        }
+      }
+    });
+    
+    return uniqueGeneratedIds.filter(id => {
+       const isUsedInDB = installedSeals.some(seal => seal.sealId === id && seal.seal_type === currentType);
+       const isUsedInForm = usedInForm.includes(id);
+       return !isUsedInDB && !isUsedInForm;
+    });
+  };
+
+  const startInputScanner = async (category, slot, forcedCamIndex = null) => {
+    if (activeScanRef.current && forcedCamIndex === null) return;
+    
+    setScannerModal({ isOpen: true, category, slot });
+    activeScanRef.current = true;
+
+    try {
+      await new Promise(resolve => setTimeout(resolve, 300));
+      if (!activeScanRef.current) return;
+
+      const jsQRModule = await import('https://esm.sh/jsqr');
+      const jsQR = jsQRModule.default || jsQRModule;
+
+      if (streamRef.current) {
+          streamRef.current.getTracks().forEach(track => track.stop());
+      }
+      if (animationRef.current) {
+          cancelAnimationFrame(animationRef.current);
+      }
+
+      let targetList = cameras;
+      if (targetList.length === 0) {
+          try {
+              const tempStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+              tempStream.getTracks().forEach(t => t.stop());
+          } catch(e) {}
+
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const videoDevices = devices.filter(d => d.kind === 'videoinput');
+          const backCams = videoDevices.filter(c => {
+              const lbl = c.label.toLowerCase();
+              return lbl.includes('back') || lbl.includes('belakang') || lbl.includes('environment');
+          });
+          targetList = backCams.length > 0 ? backCams : videoDevices;
+          setCameras(targetList);
+      }
+
+      let camIndexToUse = 0;
+      if (forcedCamIndex !== null) {
+          camIndexToUse = forcedCamIndex;
+      } else if (targetList.length > 0) {
+          const bestIdx = targetList.findIndex(c => {
+              const lbl = c.label.toLowerCase();
+              if (lbl.includes('main') || lbl.includes('1x') || lbl.includes('standard') || lbl.includes('utama')) return true;
+              return !lbl.includes('ultra') && !lbl.includes('0.5') && !lbl.includes('wide') && !lbl.includes('macro') && !lbl.includes('tele') && !lbl.includes('depth');
+          });
+          camIndexToUse = bestIdx !== -1 ? bestIdx : 0;
+      }
+
+      setCurrentCamIndex(camIndexToUse);
+
+      const constraints = {
+          video: targetList.length > 0 && targetList[camIndexToUse].deviceId 
+              ? { deviceId: { exact: targetList[camIndexToUse].deviceId }, width: { ideal: 1280 }, advanced: [{ focusMode: "continuous" }] } 
+              : { facingMode: "environment", width: { ideal: 1280 }, advanced: [{ focusMode: "continuous" }] }
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = stream;
+
+      if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.setAttribute("playsinline", true);
+          videoRef.current.play();
+
+          const scanLoop = () => {
+              if (!activeScanRef.current) return;
+              
+              if (videoRef.current && videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA) {
+                  const canvas = canvasRef.current;
+                  if (!canvas) return;
+                  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+                  
+                  const vw = videoRef.current.videoWidth;
+                  const vh = videoRef.current.videoHeight;
+                  
+                  const size = Math.min(vw, vh);
+                  const zoomFactor = 2.5; 
+                  const cropSize = size / zoomFactor; 
+                  const sx = (vw - cropSize) / 2;
+                  const sy = (vh - cropSize) / 2;
+                  
+                  // OPTIMASI 1: Canvas dinamis mengikuti ukuran asli (Mencegah blur)
+                  canvas.width = cropSize; 
+                  canvas.height = cropSize;
+                  
+                  // OPTIMASI 2: Matikan filter agresif yang membuat silau
+                  ctx.filter = 'none';
+                  ctx.drawImage(videoRef.current, sx, sy, cropSize, cropSize, 0, 0, cropSize, cropSize);
+
+                  const imageData = ctx.getImageData(0, 0, cropSize, cropSize);
+                  const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                      // OPTIMASI 3: attemptBoth agar bisa membaca QR dalam berbagai kondisi cahaya/inversi
+                      inversionAttempts: "attemptBoth",
+                  });
+
+                  if (code && code.data) {
+                      const scannedId = extractSealId(code.data).trim();
+                      handleSuccessfulScan(scannedId, category, slot);
+                      return;
+                  }
+              }
+              animationRef.current = requestAnimationFrame(scanLoop);
+          };
+          animationRef.current = requestAnimationFrame(scanLoop);
+      }
+
+    } catch (err) {
+      if (activeScanRef.current) {
+          showNotification("Gagal mengakses kamera. Pastikan izin kamera diberikan.", 'error');
+          stopInputScanner();
+      }
+    }
+  };
+
+  const handleSuccessfulScan = (scannedId, category, slot) => {
+      // VALIDASI KETAT: Tolak jika ID tidak ada di Master Data Produksi
+      if (!uniqueGeneratedIds.includes(scannedId)) {
+         showNotification(`INVALID: ID '${scannedId}' palsu atau tidak terdaftar di Master Data!`, 'error');
+         stopInputScanner();
+         return;
+      }
+
+      const currentType = slot === 1 ? sealInputs[category].type : sealInputs[category].type2;
+      let isAlreadyScanned = false;
+      
+      Object.keys(sealInputs).forEach(k => {
+         if (!sealInputs[k].isNone) {
+           if (sealInputs[k].id === scannedId && sealInputs[k].type === currentType) {
+             isAlreadyScanned = true;
+           }
+           if (sealInputs[k].isDouble && sealInputs[k].id2 === scannedId && sealInputs[k].type2 === currentType) {
+             isAlreadyScanned = true;
+           }
+         }
+      });
+      
+      const isUsedInDB = installedSeals.some(seal => seal.sealId === scannedId && seal.seal_type === currentType);
+      
+      if (isAlreadyScanned || isUsedInDB) {
+         showNotification(`Peringatan: ID ini sudah terpakai sebagai ${currentType}!`, 'error');
+         stopInputScanner();
+         return;
+      }
+
+      stopInputScanner();
+      updateSealInput(category, slot === 1 ? 'id' : 'id2', scannedId);
+  };
+
+  const switchCameraInput = async () => {
+    if (cameras.length <= 1) return;
+    const nextIdx = (currentCamIndex + 1) % cameras.length;
+    startInputScanner(scannerModal.category, scannerModal.slot, nextIdx);
+  };
+
+  const stopInputScanner = () => {
+    activeScanRef.current = false;
+    if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+        animationRef.current = null;
+    }
+    if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+    }
+    if (videoRef.current) {
+        videoRef.current.srcObject = null;
+    }
+    setScannerModal({ isOpen: false, category: null, slot: null });
+  };
+
+  const handleInstallSubmit = async (e) => {
+    e.preventDefault();
+
+    const activeSeals = [];
+    Object.values(sealInputs).forEach(s => {
+       if (s.id !== '') activeSeals.push({ id: s.id, name: s.name, type: s.type });
+       if (s.isDouble && s.id2 !== '') activeSeals.push({ id: s.id2, name: `${s.name} (Ke-2)`, type: s.type2 });
+    });
+    
+    if (activeSeals.length === 0) return showNotification('Silakan pilih minimal 1 ID Segel!', 'error');
+    if (!installForm.location || !installForm.pic) return showNotification('Lokasi dan PIC wajib diisi!', 'error');
+    if (!installForm.nopol) return showNotification('No. Polisi wajib diisi!', 'error');
+    
+    if (!GOOGLE_APPS_SCRIPT_URL) {
+       showNotification("URL Google Apps Script belum diisi di kode! Pastikan setup Google Drive selesai.", 'error');
+       return;
+    }
+
+    setIsUploading(true);
+
+    try {
+      // 1. KUMPULKAN SEMUA FOTO UNTUK DIGABUNG MENJADI KOLASE GRID
+      const imagesToGrid = [];
+      
+      Object.keys(sealInputs).forEach(key => {
+        const data = sealInputs[key];
+        if (!data.isNone && data.photo) {
+           imagesToGrid.push({ src: data.photo, label: data.name.toUpperCase() });
+        }
+      });
+
+      if (imagesToGrid.length === 0) {
+          setIsUploading(false);
+          return showNotification("Peringatan: Tidak ada satupun foto item segel yang diunggah!", 'error');
+      }
+
+      // 2. BUAT KANVAS VIRTUAL UNTUK MENGGAMBAR KOLASE
+      const len = imagesToGrid.length;
+      let cols = 1, rows = 1;
+      if (len === 2) { cols = 2; rows = 1; }
+      else if (len === 3) { cols = 3; rows = 1; }
+      else if (len === 4) { cols = 2; rows = 2; }
+      else if (len === 5 || len === 6) { cols = 3; rows = 2; }
+      else if (len > 6) { cols = 3; rows = Math.ceil(len / 3); }
+
+      const CELL_SIZE = 800; 
+      const canvas = document.createElement('canvas');
+      canvas.width = cols * CELL_SIZE; canvas.height = rows * CELL_SIZE;
+      const ctx = canvas.getContext('2d');
+
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const loadImage = (src) => new Promise((resolve, reject) => {
+          const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = src;
+      });
+
+      for (let i = 0; i < imagesToGrid.length; i++) {
+          const imgItem = imagesToGrid[i];
+          try {
+              const img = await loadImage(imgItem.src);
+              const col = i % cols; const row = Math.floor(i / cols);
+              const x = col * CELL_SIZE; const y = row * CELL_SIZE;
+
+              const size = Math.min(img.width, img.height);
+              const sx = (img.width - size) / 2; const sy = (img.height - size) / 2;
+              
+              ctx.drawImage(img, sx, sy, size, size, x, y, CELL_SIZE, CELL_SIZE);
+
+              ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+              ctx.fillRect(x, y + CELL_SIZE - 80, CELL_SIZE, 80);
+              
+              ctx.fillStyle = '#ffffff'; ctx.font = 'bold 36px "Nunito", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+              ctx.fillText(imgItem.label, x + (CELL_SIZE / 2), y + CELL_SIZE - 40);
+              
+              ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 10; ctx.strokeRect(x, y, CELL_SIZE, CELL_SIZE);
+          } catch (err) {
+              console.error('Gagal memuat gambar', err);
+          }
+      }
+
+      // 3. KOMPRESI KE BASE64 (JPEG 75%)
+      const gridBase64 = canvas.toDataURL('image/jpeg', 0.75).split(',')[1];
+      
+      const tglSegel = new Date().toLocaleDateString('id-ID').replace(/\//g, '-');
+      const newFilename = `${installForm.nopol}_${installForm.location}_${tglSegel}.jpg`;
+      
+      // 4. KIRIM REQUEST TUNGGAL KE GOOGLE APPS SCRIPT
+      const response = await fetch(GOOGLE_APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+           base64: gridBase64,
+           filename: newFilename
+        })
+      });
+
+      const result = await response.json();
+      if (!result.success) throw new Error(result.error);
+
+      const uploadedPhotoUrl = result.url;
+
+      // 5. GENERATE DATA UNTUK DISIMPAN KE SUPABASE
+      const newSealsData = activeSeals.map(s => ({
+        sealId: s.id,
+        location: installForm.location,
+        pic: installForm.pic,
+        nopol: installForm.nopol,
+        seal_category: s.name,
+        seal_type: s.type,
+        photo: uploadedPhotoUrl, 
+        installDate: new Date().toLocaleString('id-ID'),
+        timestamp: Date.now(),
+        status: 'Terpasang'
+      }));
+
+      // Eksekusi Simpan Ke Supabase (Array Insert)
+      let insertedData = newSealsData;
+      if (dbClient) {
+        const { data, error } = await dbClient.from('installed_seals').insert(newSealsData).select();
+        if (error) {
+           if (error.code === '23505') {
+             throw new Error("Terjadi duplikasi: Nomor Segel dan Jenis yang sama sudah terdaftar di database.");
+           }
+           throw error;
+        }
+        if (data) insertedData = data;
+      }
+
+      setInstalledSeals([...insertedData, ...installedSeals]);
+      
+      // Reset Form
+      setInstallForm(prev => ({ ...prev, nopol: '', photo: null }));
+      setSealInputs(initialSealInputs);
+      
+      if(currentUser.role === 'admin') {
+         setActiveMenu('daftar-data');
+      }
+      
+      showNotification(`${newSealsData.length} Data segel berhasil disimpan! Kolase bukti sukses diunggah.`, 'success');
+      
+    } catch(err) {
+      console.error(err);
+      showNotification(err.message || "Gagal menyimpan ke Google Drive atau Supabase Database.", 'error');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const renderSealCategoryRow = (key) => {
+    const sealData = sealInputs[key];
+    const available1 = getAvailableIdsFor(key, false).filter(id => String(id).toLowerCase().includes(String(dropdownSearch).toLowerCase()));
+    const isOpen1 = openDropdown === `${key}_1`;
+    
+    const available2 = getAvailableIdsFor(key, true).filter(id => String(id).toLowerCase().includes(String(dropdownSearch).toLowerCase()));
+    const isOpen2 = openDropdown === `${key}_2`;
+
+    return (
+      <div 
+        key={key} 
+        className={`p-4 border ${sealData.isNone ? 'border-gray-200 bg-gray-100 opacity-60' : 'border-blue-200 bg-blue-50/30'} rounded-xl flex flex-col gap-4 transition-all duration-300`}
+      >
+         <div className="flex justify-between items-center border-b border-gray-200 pb-2">
+            <p className="text-sm font-extrabold text-gray-800">{sealData.name}</p>
+            <div className="flex gap-4">
+               <label className="flex items-center gap-1.5 cursor-pointer">
+                 <input 
+                   type="checkbox" 
+                   checked={sealData.isNone} 
+                   onChange={(e) => updateSealInput(key, 'isNone', e.target.checked)} 
+                   className="w-4 h-4 text-gray-600 rounded border-gray-300" 
+                 />
+                 <span className="text-xs font-bold text-gray-600">Tidak Ada</span>
+               </label>
+               <label className={`flex items-center gap-1.5 ${sealData.isNone ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
+                 <input 
+                   type="checkbox" 
+                   disabled={sealData.isNone} 
+                   checked={sealData.isDouble} 
+                   onChange={(e) => updateSealInput(key, 'isDouble', e.target.checked)} 
+                   className="w-4 h-4 text-[#146b99] rounded border-gray-300 focus:ring-[#146b99]" 
+                 />
+                 <span className="text-xs font-bold text-[#146b99]">Double Segel</span>
+               </label>
+            </div>
+         </div>
+
+         {!sealData.isNone && (
+           <div className="animate-in fade-in slide-in-from-top-2 duration-300 flex flex-col gap-4">
+             {/* Segel 1 */}
+             <div className="flex flex-col md:flex-row gap-3">
+                 <div className="w-full md:w-1/3">
+                    <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">Jenis Segel</label>
+                    <select 
+                      value={sealData.type} 
+                      onChange={(e) => updateSealInput(key, 'type', e.target.value)} 
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm font-bold text-gray-700 outline-none focus:border-[#146b99]"
+                    >
+                       <option value="Segel Pecah Telur">Segel Pecah Telur</option>
+                       <option value="Kabel Ties">Kabel Ties</option>
+                    </select>
+                 </div>
+                 <div className="w-full md:w-2/3">
+                    <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">Nomor / ID Segel</label>
+                    {sealData.type === 'Segel Pecah Telur' ? (
+                       <button 
+                         type="button" 
+                         onClick={() => startInputScanner(key, 1)} 
+                         className={`w-full px-3 py-2 border ${sealData.id ? 'border-green-500 bg-green-50 text-green-700' : 'border-blue-400 bg-blue-50 hover:bg-blue-100 text-blue-700'} rounded-lg text-sm font-extrabold flex items-center justify-center gap-2 transition-colors shadow-sm`}
+                       >
+                         <Scan size={16}/> {sealData.id || "Tap untuk Scan QR Segel"}
+                       </button>
+                    ) : (
+                       <div className="w-full relative" ref={isOpen1 ? sealDropdownRef : null}>
+                          <div 
+                            onClick={() => { setOpenDropdown(isOpen1 ? null : `${key}_1`); setDropdownSearch(''); }} 
+                            className={`w-full px-3 py-2 border ${isOpen1 ? 'border-[#146b99] ring-1 ring-[#146b99]' : 'border-gray-300'} rounded-lg flex justify-between items-center bg-white cursor-pointer`}
+                          >
+                             <span className={sealData.id ? "text-gray-800 font-semibold text-sm" : "text-gray-400 text-sm"}>
+                               {sealData.id || "Pilih ID Kabel Ties..."}
+                             </span>
+                             <div className="flex items-center gap-1">
+                                {sealData.id && (
+                                  <button 
+                                    type="button" 
+                                    onClick={(e) => { e.stopPropagation(); updateSealInput(key, 'id', ''); }} 
+                                    className="text-gray-400 hover:text-red-500"
+                                  >
+                                    <X size={14}/>
+                                  </button>
+                                )}
+                                <ChevronDown size={14} className="text-gray-400"/>
+                             </div>
+                          </div>
+                          
+                          {isOpen1 && (
+                             <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-xl overflow-hidden">
+                                <div className="p-2 border-b flex items-center bg-gray-50">
+                                   <Search size={14} className="text-gray-400 mr-2" />
+                                   <input 
+                                     autoFocus 
+                                     type="text" 
+                                     className="w-full bg-transparent outline-none text-sm" 
+                                     placeholder="Cari ID..." 
+                                     value={dropdownSearch} 
+                                     onChange={e => setDropdownSearch(e.target.value)} 
+                                     onClick={e => e.stopPropagation()} 
+                                   />
+                                </div>
+                                <ul className="max-h-48 overflow-y-auto custom-scrollbar">
+                                   {available1.map(id => (
+                                     <li 
+                                       key={id} 
+                                       onClick={() => { updateSealInput(key, 'id', id); setOpenDropdown(null); }} 
+                                       className="px-3 py-2 text-sm cursor-pointer hover:bg-blue-50 border-b border-gray-50 flex items-center gap-2"
+                                     >
+                                       <span className="font-mono text-gray-700">{id}</span>
+                                     </li>
+                                   ))}
+                                   {available1.length === 0 && (
+                                     <li className="p-3 text-xs text-center text-gray-500">Tidak ada ID tersedia</li>
+                                   )}
+                                </ul>
+                             </div>
+                          )}
+                       </div>
+                    )}
+                 </div>
+             </div>
+
+             {/* Segel 2 */}
+             {sealData.isDouble && (
+                 <div className="flex flex-col md:flex-row gap-3 pt-3 border-t border-dashed border-blue-200">
+                     <div className="w-full md:w-1/3">
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">Jenis Segel (Ke-2)</label>
+                        <select 
+                          value={sealData.type2} 
+                          onChange={(e) => updateSealInput(key, 'type2', e.target.value)} 
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm font-bold text-gray-700 outline-none focus:border-[#146b99]"
+                        >
+                           <option value="Segel Pecah Telur">Segel Pecah Telur</option>
+                           <option value="Kabel Ties">Kabel Ties</option>
+                        </select>
+                     </div>
+                     <div className="w-full md:w-2/3">
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-1.5">Nomor / ID Segel (Ke-2)</label>
+                        {sealData.type2 === 'Segel Pecah Telur' ? (
+                           <button 
+                             type="button" 
+                             onClick={() => startInputScanner(key, 2)} 
+                             className={`w-full px-3 py-2 border ${sealData.id2 ? 'border-green-500 bg-green-50 text-green-700' : 'border-blue-400 bg-blue-50 hover:bg-blue-100 text-blue-700'} rounded-lg text-sm font-extrabold flex items-center justify-center gap-2 transition-colors shadow-sm`}
+                           >
+                             <Scan size={16}/> {sealData.id2 || "Tap untuk Scan QR Segel 2"}
+                           </button>
+                        ) : (
+                           <div className="w-full relative" ref={isOpen2 ? sealDropdownRef : null}>
+                              <div 
+                                onClick={() => { setOpenDropdown(isOpen2 ? null : `${key}_2`); setDropdownSearch(''); }} 
+                                className={`w-full px-3 py-2 border ${isOpen2 ? 'border-[#146b99] ring-1 ring-[#146b99]' : 'border-gray-300'} rounded-lg flex justify-between items-center bg-white cursor-pointer`}
+                              >
+                                 <span className={sealData.id2 ? "text-gray-800 font-semibold text-sm" : "text-gray-400 text-sm"}>
+                                   {sealData.id2 || "Pilih ID Kabel Ties Ke-2..."}
+                                 </span>
+                                 <div className="flex items-center gap-1">
+                                    {sealData.id2 && (
+                                      <button 
+                                        type="button" 
+                                        onClick={(e) => { e.stopPropagation(); updateSealInput(key, 'id2', ''); }} 
+                                        className="text-gray-400 hover:text-red-500"
+                                      >
+                                        <X size={14}/>
+                                      </button>
+                                    )}
+                                    <ChevronDown size={14} className="text-gray-400"/>
+                                 </div>
+                              </div>
+                              
+                              {isOpen2 && (
+                                 <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-xl overflow-hidden">
+                                    <div className="p-2 border-b flex items-center bg-gray-50">
+                                       <Search size={14} className="text-gray-400 mr-2" />
+                                       <input 
+                                         autoFocus 
+                                         type="text" 
+                                         className="w-full bg-transparent outline-none text-sm" 
+                                         placeholder="Cari ID..." 
+                                         value={dropdownSearch} 
+                                         onChange={e => setDropdownSearch(e.target.value)} 
+                                         onClick={e => e.stopPropagation()} 
+                                       />
+                                    </div>
+                                    <ul className="max-h-48 overflow-y-auto custom-scrollbar">
+                                       {available2.map(id => (
+                                         <li 
+                                           key={id} 
+                                           onClick={() => { updateSealInput(key, 'id2', id); setOpenDropdown(null); }} 
+                                           className="px-3 py-2 text-sm cursor-pointer hover:bg-blue-50 border-b border-gray-50 flex items-center gap-2"
+                                         >
+                                           <span className="font-mono text-gray-700">{id}</span>
+                                         </li>
+                                       ))}
+                                       {available2.length === 0 && (
+                                         <li className="p-3 text-xs text-center text-gray-500">Tidak ada ID tersedia</li>
+                                       )}
+                                    </ul>
+                                 </div>
+                              )}
+                           </div>
+                        )}
+                     </div>
+                 </div>
+             )}
+
+             {/* Foto Bukti */}
+             <div className="pt-3 border-t border-gray-200">
+                <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wide mb-2">
+                  Foto Bukti Terpasang ({sealData.name}) <span className="text-red-500">*</span>
+                </label>
+                <div className="flex items-center gap-4">
+                   {sealData.photo ? (
+                      <img 
+                        src={sealData.photo} 
+                        alt="Preview" 
+                        className="h-14 w-14 object-cover rounded-lg border-2 border-gray-300 shadow-sm shrink-0" 
+                      />
+                   ) : (
+                      <div className="h-14 w-14 bg-white rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center text-gray-400 shrink-0">
+                        <Camera size={20} />
+                      </div>
+                   )}
+                   <div className="flex-1 w-full relative">
+                     <input 
+                       type="file" 
+                       accept="image/*" 
+                       capture="environment" 
+                       onChange={(e) => handleCategoryPhotoUpload(e, key)} 
+                       className="block w-full text-xs text-gray-500 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:font-bold file:bg-[#146b99] file:text-white hover:file:bg-[#11577c] cursor-pointer transition-colors shadow-sm" 
+                     />
+                   </div>
+                </div>
+             </div>
+           </div>
+         )}
+      </div>
+    );
+  };
+
+  return (
+    <>
+      {scannerModal.isOpen && (
+        <div className="fixed inset-0 bg-black z-[99999] flex flex-col animate-in fade-in zoom-in duration-200">
+           <div className="p-4 bg-gray-900 text-white flex justify-between items-center shadow-md">
+              <div className="flex items-center gap-3">
+                 <div className="bg-blue-600 p-2 rounded-lg">
+                   <Scan size={20} />
+                 </div>
+                 <div>
+                    <h3 className="font-bold text-sm leading-none">Arahkan ke QR Code Segel</h3>
+                    <p className="text-[10px] text-gray-400 mt-1 uppercase tracking-widest">
+                      {sealInputs[scannerModal.category]?.name} {scannerModal.slot === 2 ? '(Segel Ke-2)' : ''}
+                    </p>
+                 </div>
+              </div>
+              <button 
+                type="button"
+                onClick={stopInputScanner} 
+                className="p-2 bg-gray-800 rounded-full hover:bg-red-500 transition-colors"
+              >
+                <X size={20}/>
+              </button>
+           </div>
+           <div className="flex-1 flex flex-col justify-center items-center bg-black relative p-4">
+               <div className="absolute inset-0 border-4 border-blue-500 opacity-20 pointer-events-none m-4 rounded-3xl"></div>
+               
+               <div className="w-full max-w-md aspect-square bg-gray-900 rounded-2xl overflow-hidden shadow-[0_0_50px_rgba(0,0,0,0.5)] relative">
+                  <video ref={videoRef} className="hidden" playsInline muted />
+                  <canvas ref={canvasRef} className="w-full h-full object-cover scale-[1.02]" />
+                  
+                  {/* Panduan Area Scan */}
+                  <div className="absolute inset-0 border-2 border-blue-500/40 m-24 rounded-xl pointer-events-none"></div>
+                  <div className="absolute top-1/2 left-24 right-24 h-0.5 bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.8)] pointer-events-none" style={{animation: 'scan-animation 2s ease-in-out infinite'}}></div>
+               </div>
+
+               <p className="text-white text-sm font-semibold mt-8 animate-pulse text-center">Sedang memindai...</p>
+
+               {cameras.length > 1 && (
+                 <button 
+                   type="button"
+                   onClick={switchCameraInput}
+                   className="mt-8 bg-gray-800/80 backdrop-blur-md border border-gray-600 text-white px-6 py-3 rounded-full font-bold tracking-wider hover:bg-gray-700 transition-colors flex items-center gap-2 z-10"
+                 >
+                   <SwitchCamera size={18} /> Ganti Lensa ({currentCamIndex + 1}/{cameras.length})
+                 </button>
+               )}
+           </div>
+        </div>
+      )}
+      
+      <div className="animate-in fade-in duration-300">
+        <div className="bg-white p-4 md:p-8 rounded-xl shadow-sm border border-gray-200">
+          <div className="mb-6 border-b border-gray-100 pb-4">
+            <h2 className="text-xl font-bold text-gray-800">Form Pemasangan Segel</h2>
+          </div>
+          
+          <form onSubmit={handleInstallSubmit} className="space-y-6">
+            
+            <div className="bg-blue-50/50 border border-blue-100 rounded-lg p-4">
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                 <div>
+                   <label className="block text-xs font-bold text-blue-800 mb-1.5 uppercase tracking-wide">
+                     Lokasi / Tag Data <Lock size={12} className="inline mb-0.5"/>
+                   </label>
+                   <input 
+                     type="text" 
+                     value={installForm.location} 
+                     readOnly 
+                     className="w-full px-4 py-2 font-bold bg-blue-100/50 border border-blue-200 text-blue-900 rounded-md outline-none text-sm cursor-not-allowed" 
+                   />
+                 </div>
+                 <div>
+                   <label className="block text-xs font-bold text-blue-800 mb-1.5 uppercase tracking-wide">
+                     Nama PIC / Akun <Lock size={12} className="inline mb-0.5"/>
+                   </label>
+                   <input 
+                     type="text" 
+                     value={installForm.pic} 
+                     readOnly 
+                     className="w-full px-4 py-2 font-bold bg-blue-100/50 border border-blue-200 text-blue-900 rounded-md outline-none text-sm cursor-not-allowed" 
+                   />
+                 </div>
+               </div>
+               <p className="text-[10px] text-blue-600 font-semibold mt-3 italic">
+                 *Lokasi dan PIC otomatis terkunci berdasarkan profil akun yang sedang login.
+               </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-bold text-gray-800 mb-1.5">
+                No. Polisi / Detail Objek Tambahan <span className="text-red-500">*</span>
+              </label>
+              <input 
+                required 
+                type="text" 
+                placeholder="Contoh: B1234CDE" 
+                value={installForm.nopol} 
+                onChange={(e) => setInstallForm({...installForm, nopol: e.target.value.replace(/\s/g, '').toUpperCase()})} 
+                className="w-full px-4 py-2.5 font-semibold border border-gray-300 rounded-md focus:ring-1 focus:ring-[#146b99] focus:border-[#146b99] outline-none text-sm text-gray-700 bg-white" 
+              />
+            </div>
+
+            <div className="space-y-4 pt-4 border-t border-gray-100">
+               <h3 className="text-sm font-bold text-gray-800 border-b pb-2 mb-4">
+                 Data Segel Terpasang (Pilih yang sesuai)
+               </h3>
+               {['gps', 'mdvr', 'dsm', 'ch3', 'ch1', 'ch2'].map(key => renderSealCategoryRow(key))}
+            </div>
+
+            <div className="pt-4 flex justify-end border-t border-gray-100 mt-6">
+              <button 
+                type="submit" 
+                disabled={isUploading || !isFormValid()} 
+                className="w-full sm:w-auto bg-[#156592] hover:bg-[#11577c] text-white px-8 py-3 rounded-md font-bold text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
+              >
+                {isUploading ? <Loader2 size={16} className="animate-spin" /> : null} 
+                {isUploading ? "Menyimpan Data..." : "Simpan Data Pemasangan"}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </>
+  );
+};
+
+// ============================================================================
+// KOMPONEN HAL halaman: VIEW DATA LIST
+// ============================================================================
+const ViewDataList = ({ 
+  dbClient,
+  installedSeals, 
+  setInstalledSeals,
+  showConfirm,
+  showNotification
+}) => {
+  const [sealSearch, setSealSearch] = useState('');
+  const [sealEntries, setSealEntries] = useState(10);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Reset ke halaman 1 jika user melakukan pencarian atau mengubah jumlah entri
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [sealSearch, sealEntries]);
+
+  const filteredSeals = installedSeals.filter(seal => 
+    String(seal?.sealId || '').toLowerCase().includes(String(sealSearch).toLowerCase()) || 
+    String(seal?.location || '').toLowerCase().includes(String(sealSearch).toLowerCase()) ||
+    String(seal?.pic || '').toLowerCase().includes(String(sealSearch).toLowerCase()) ||
+    String(seal?.nopol || '').toLowerCase().includes(String(sealSearch).toLowerCase())
+  );
+  
+  const totalPages = Math.ceil(filteredSeals.length / sealEntries) || 1;
+  const startIndex = (currentPage - 1) * sealEntries;
+  const displayedSeals = filteredSeals.slice(startIndex, startIndex + sealEntries);
+
+  const handleDeleteInstalledSeal = async (sealTarget) => {
+    showConfirm(`Yakin ingin menghapus riwayat pemasangan segel ini?`, async () => {
+      if (dbClient) {
+          // Logika pencarian data yang jauh lebih presisi
+          let query = dbClient.from('installed_seals').delete();
+          
+          if (sealTarget.id) {
+              query = query.eq('id', sealTarget.id);
+          } else {
+              query = query.eq('sealId', sealTarget.sealId).eq('seal_type', sealTarget.seal_type);
+          }
+          
+          const { error } = await query;
+          
+          if (error) {
+             console.error("Delete Error:", error);
+             // Menampilkan error persis dari mesin Supabase agar kita tahu akar masalahnya
+             return showNotification(`Gagal menghapus dari database: ${error.message || 'Hubungi Admin'}`, 'error');
+          }
+      }
+      
+      // Update state lokal untuk menghilangkan baris yang baru saja dihapus
+      setInstalledSeals(installedSeals.filter(s => 
+         sealTarget.id ? s.id !== sealTarget.id : (s.sealId !== sealTarget.sealId || s.seal_type !== sealTarget.seal_type)
+      ));
+      
+      showNotification("Data berhasil dihapus.", 'success');
+    });
+  };
+
+  return (
+    <div className="animate-in fade-in duration-300">
+      <div className="mb-5">
+         <h2 className="text-2xl font-bold text-gray-800">Daftar Data Seal Terpasang</h2>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-4 border-b border-gray-200 flex flex-col sm:flex-row sm:justify-between items-start sm:items-center gap-4 bg-white">
+           <div className="flex items-center gap-2">
+              <select 
+                value={sealEntries} 
+                onChange={(e) => setSealEntries(Number(e.target.value))} 
+                className="border border-gray-300 rounded-md px-3 py-1.5 text-sm text-gray-600 outline-none focus:border-[#146b99] cursor-pointer"
+              >
+                 <option value={10}>10</option>
+                 <option value={25}>25</option>
+                 <option value={50}>50</option>
+                 <option value={100}>100</option>
+              </select>
+              <span className="text-sm text-gray-500 font-medium">entri per halaman</span>
+           </div>
+           
+           <div className="relative w-full sm:w-auto">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input 
+                type="text" 
+                placeholder="Cari ID / Nopol..." 
+                value={sealSearch} 
+                onChange={(e) => setSealSearch(e.target.value)} 
+                className="pl-9 pr-4 py-1.5 border border-gray-300 rounded-md text-sm outline-none focus:border-[#146b99] w-full sm:w-64" 
+              />
+           </div>
+        </div>
+
+        <div className="overflow-x-auto min-h-[400px] custom-scrollbar">
+          <table className="w-full text-left border-collapse min-w-[700px]">
+            <thead className="bg-[#156592] text-white text-[11px] uppercase tracking-wider">
+              <tr>
+                <th className="px-6 py-4 font-bold whitespace-nowrap">No. Polisi</th>
+                <th className="px-6 py-4 font-bold whitespace-nowrap">Waktu</th>
+                <th className="px-6 py-4 font-bold whitespace-nowrap">Lokasi</th>
+                <th className="px-6 py-4 font-bold whitespace-nowrap">PIC</th>
+                <th className="px-6 py-4 font-bold whitespace-nowrap">ID Segel</th>
+                <th className="px-6 py-4 font-bold whitespace-nowrap">Posisi & Jenis</th>
+                <th className="px-6 py-4 font-bold whitespace-nowrap">Status</th>
+                <th className="px-6 py-4 font-bold text-center whitespace-nowrap">Aksi</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {displayedSeals.length === 0 ? (
+                <tr>
+                  <td colSpan="8" className="p-8 text-center text-gray-400 font-bold text-sm">
+                    Belum ada data segel yang dipasang.
+                  </td>
+                </tr>
+              ) : (
+                displayedSeals.map((seal, idx) => (
+                  <tr key={idx} className="hover:bg-gray-50/50 transition-colors">
+                    <td className="px-6 py-4 text-sm font-bold text-gray-800 whitespace-nowrap">{seal.nopol || '-'}</td>
+                    <td className="px-6 py-4 text-sm font-semibold text-gray-700 whitespace-nowrap flex items-center gap-2">
+                      <CalendarClock size={14} className="text-gray-400" /> {seal.installDate}
+                    </td>
+                    <td className="px-6 py-4 text-sm font-extrabold text-gray-800 whitespace-nowrap">{seal.location}</td>
+                    <td className="px-6 py-4 text-sm font-semibold text-gray-700 whitespace-nowrap">{seal.pic}</td>
+                    <td className="px-6 py-4 font-mono font-extrabold text-[#156592] whitespace-nowrap">{seal.sealId}</td>
+                    <td className="px-6 py-4 text-sm font-semibold text-gray-700 whitespace-nowrap">
+                      <div className="flex flex-col">
+                        <span>{seal.seal_category || '-'}</span>
+                        <span className="text-[10px] uppercase font-bold text-gray-500 border border-gray-200 w-fit px-1.5 rounded mt-0.5 bg-gray-50">
+                          {seal.seal_type || seal.notes || '-'}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className="bg-emerald-100 text-emerald-700 px-2.5 py-1 rounded-md text-[10px] font-bold border border-emerald-200 uppercase tracking-widest">
+                        {seal.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-center whitespace-nowrap">
+                      <div className="flex justify-center gap-3">
+                        {seal.photo && (
+                          <button 
+                            onClick={() => window.open(seal.photo, '_blank')}
+                            className="text-xs font-bold text-[#146b99] hover:text-blue-800 transition-colors"
+                            title="Lihat Foto Bukti"
+                          >
+                            FOTO
+                          </button>
+                        )}
+                        <button 
+                          onClick={() => handleDeleteInstalledSeal(seal)} 
+                          className="text-xs font-bold text-gray-400 hover:text-red-500 transition-colors"
+                        >
+                          HAPUS
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* FITUR PAGINATION (HALAMAN) BAWAH */}
+        <div className="p-4 border-t border-gray-200 flex flex-col sm:flex-row justify-between items-center gap-4 bg-white text-sm">
+          <div className="text-gray-500 font-medium text-xs sm:text-sm">
+            Menampilkan <span className="font-bold text-gray-800">{filteredSeals.length === 0 ? 0 : startIndex + 1}</span> hingga <span className="font-bold text-gray-800">{Math.min(startIndex + sealEntries, filteredSeals.length)}</span> dari <span className="font-bold text-gray-800">{filteredSeals.length}</span> entri
+          </div>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-xs font-bold uppercase">
+              Prev
+            </button>
+            {Array.from({ length: totalPages }, (_, i) => i + 1)
+              .filter(p => p === 1 || p === totalPages || Math.abs(currentPage - p) <= 1)
+              .map((p, index, array) => (
+                <React.Fragment key={p}>
+                  {index > 0 && p - array[index - 1] > 1 && <span className="px-2 text-gray-400">...</span>}
+                  <button onClick={() => setCurrentPage(p)} className={`min-w-[32px] py-1.5 rounded-lg border ${currentPage === p ? 'bg-[#146b99] text-white border-[#146b99] font-bold' : 'bg-transparent border-transparent text-gray-600 hover:bg-gray-100'} transition-colors font-semibold`}>
+                    {p}
+                  </button>
+                </React.Fragment>
+            ))}
+            <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-xs font-bold uppercase">
+              Next
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
+// KOMPONEN HALAMAN: VIEW SCANNER VERIFIKASI UTAMA
+// ============================================================================
+const ViewScanner = ({ installedSeals, generateHistory, showNotification }) => {
+  const [scanResult, setScanResult] = useState(null);
+  const [isScanning, setIsScanning] = useState(false);
+  const activeScanRef = useRef(false);
+
+  // Custom Scanner Refs untuk Enterprise Architecture
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const streamRef = useRef(null);
+  const animationRef = useRef(null);
+
+  // State untuk Tukar Kamera
+  const [cameras, setCameras] = useState([]);
+  const [currentCamIndex, setCurrentCamIndex] = useState(0);
+
+  const processScannedData = (rawText) => { 
+      const scannedId = extractSealId(rawText).trim();
+
+      // VALIDASI KETAT: Periksa apakah ID pernah di-generate di Master Data
+      const isValidGeneratedId = generateHistory.some(batch => 
+         batch.items && batch.items.some(item => item.id === scannedId)
+      );
+
+      if (!isValidGeneratedId) {
+          setScanResult({ 
+            raw: rawText, 
+            decoded: { 
+              success: false, 
+              error: "INVALID: ID Segel palsu atau tidak terdaftar di Master Data produksi." 
+            } 
+          }); 
+          return;
+      }
+
+      setScanResult({ 
+        raw: rawText, 
+        decoded: { success: true, data: scannedId } 
+      }); 
+  };
+
+  const startScanner = async (forcedCamIndex = null) => {
+    if (activeScanRef.current && forcedCamIndex === null) return;
+    activeScanRef.current = true;
+    
+    setScanResult(null); 
+    setIsScanning(true);
+    
+    try {
+        await new Promise(resolve => setTimeout(resolve, 300));
+        if (!activeScanRef.current) return;
+
+        // 1. Ambil Library ZXing (jsQR)
+        const jsQRModule = await import('https://esm.sh/jsqr');
+        const jsQR = jsQRModule.default || jsQRModule;
+
+        if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
+        }
+        if (animationRef.current) {
+            cancelAnimationFrame(animationRef.current);
+        }
+
+        // 2. Logika Cerdas Kamera
+        let targetList = cameras;
+        if (targetList.length === 0) {
+            try {
+                const tempStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+                tempStream.getTracks().forEach(t => t.stop());
+            } catch(e) {}
+
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const videoDevices = devices.filter(d => d.kind === 'videoinput');
+            const backCams = videoDevices.filter(c => {
+                const lbl = c.label.toLowerCase();
+                return lbl.includes('back') || lbl.includes('belakang') || lbl.includes('environment');
+            });
+            targetList = backCams.length > 0 ? backCams : videoDevices;
+            setCameras(targetList);
+        }
+
+        let camIndexToUse = 0;
+        if (forcedCamIndex !== null) {
+            camIndexToUse = forcedCamIndex;
+        } else if (targetList.length > 0) {
+            const bestIdx = targetList.findIndex(c => {
+                const lbl = c.label.toLowerCase();
+                if (lbl.includes('main') || lbl.includes('1x') || lbl.includes('standard') || lbl.includes('utama')) return true;
+                return !lbl.includes('ultra') && !lbl.includes('0.5') && !lbl.includes('wide') && !lbl.includes('macro') && !lbl.includes('tele') && !lbl.includes('depth');
+            });
+            camIndexToUse = bestIdx !== -1 ? bestIdx : 0;
+        }
+
+        setCurrentCamIndex(camIndexToUse);
+
+        const constraints = {
+            video: targetList.length > 0 && targetList[camIndexToUse].deviceId 
+                ? { deviceId: { exact: targetList[camIndexToUse].deviceId }, width: { ideal: 1280 }, advanced: [{ focusMode: "continuous" }] } 
+                : { facingMode: "environment", width: { ideal: 1280 }, advanced: [{ focusMode: "continuous" }] }
+        };
+
+        // 3. Nyalakan Kamera Mentah
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        streamRef.current = stream;
+
+        if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            videoRef.current.setAttribute("playsinline", true);
+            videoRef.current.play();
+
+            // 4. Mesin Looping Scanner Custom (ROI + Zoom + Filter GPU)
+            const scanLoop = () => {
+                if (!activeScanRef.current) return;
+                
+                if (videoRef.current && videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA) {
+                    const canvas = canvasRef.current;
+                    if (!canvas) return;
+                    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+                    
+                    const vw = videoRef.current.videoWidth;
+                    const vh = videoRef.current.videoHeight;
+                    
+                    // ROI & Digital Zoom 2.5x untuk Stiker 1x1 cm
+                    const size = Math.min(vw, vh);
+                    const zoomFactor = 2.5; 
+                    const cropSize = size / zoomFactor; 
+                    const sx = (vw - cropSize) / 2;
+                    const sy = (vh - cropSize) / 2;
+                    
+                    // OPTIMASI 1: Canvas dinamis mengikuti ukuran asli (Mencegah blur)
+                    canvas.width = cropSize; 
+                    canvas.height = cropSize;
+                    
+                    // OPTIMASI 2: Matikan filter agresif yang membuat silau
+                    ctx.filter = 'none';
+                    ctx.drawImage(videoRef.current, sx, sy, cropSize, cropSize, 0, 0, cropSize, cropSize);
+
+                    const imageData = ctx.getImageData(0, 0, cropSize, cropSize);
+                    const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                        // OPTIMASI 3: attemptBoth agar bisa membaca QR dalam berbagai kondisi cahaya/inversi
+                        inversionAttempts: "attemptBoth",
+                    });
+
+                    if (code && code.data) {
+                        stopScanner();
+                        processScannedData(code.data);
+                        return;
+                    }
+                }
+                animationRef.current = requestAnimationFrame(scanLoop);
+            };
+            animationRef.current = requestAnimationFrame(scanLoop);
+        }
+
+    } catch (err) { 
+      console.error("Scanner Error:", err);
+      if (activeScanRef.current) {
+          showNotification("Gagal mengakses kamera. Pastikan izin akses diberikan.", 'error'); 
+          setIsScanning(false); 
+          activeScanRef.current = false;
+      }
+    }
+  };
+
+  const switchCamera = async () => {
+    if (cameras.length <= 1) return;
+    const nextIdx = (currentCamIndex + 1) % cameras.length;
+    startScanner(nextIdx);
+  };
+
+  const stopScanner = () => {
+    activeScanRef.current = false;
+    if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+        animationRef.current = null;
+    }
+    if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => {
+            track.stop();
+        });
+        streamRef.current = null;
+    }
+    // PERBAIKAN PENTING: Release video element object
+    if (videoRef.current) {
+        videoRef.current.srcObject = null;
+    }
+    setIsScanning(false);
+  };
+
+  // Jalankan scanner OTOMATIS saat komponen pertama kali dirender
+  useEffect(() => {
+    let isMounted = true;
+    startScanner();
+    return () => {
+      isMounted = false;
+      stopScanner();
+    };
+  }, []);
+
+  const installedMatches = scanResult && scanResult.decoded.success 
+      ? installedSeals.filter(s => s.sealId === scanResult.decoded.data) 
+      : [];
+
+  return (
+    <>
+      {/* MODAL SCANNER LAYAR PENUH SEPERTI APLIKASI NATIVE */}
+      {isScanning && (
+        <div className="fixed inset-0 bg-black z-[9999] flex flex-col animate-in fade-in zoom-in duration-200">
+           <div className="p-4 bg-gray-900 text-white flex justify-between items-center shadow-md">
+              <div className="flex items-center gap-3">
+                 <div className="bg-[#146b99] p-2 rounded-lg">
+                   <Scan size={20} />
+                 </div>
+                 <div>
+                    <h3 className="font-bold text-sm leading-none">Verifikasi Segel</h3>
+                    <p className="text-[10px] text-gray-400 mt-1 uppercase tracking-widest">
+                      Arahkan ke QR Code
+                    </p>
+                 </div>
+              </div>
+              <button 
+                onClick={stopScanner} 
+                className="p-2 bg-gray-800 rounded-full hover:bg-red-500 transition-colors"
+              >
+                <X size={20}/>
+              </button>
+           </div>
+           <div className="flex-1 flex flex-col justify-center items-center bg-black relative p-4">
+               <div className="absolute inset-0 border-4 border-[#146b99] opacity-20 pointer-events-none m-4 rounded-3xl"></div>
+               
+               {/* UI SCANNER ENTERPRISE CUSTOM */}
+               <div className="w-full max-w-md aspect-square bg-gray-900 rounded-2xl overflow-hidden shadow-[0_0_50px_rgba(0,0,0,0.5)] relative">
+                  <video ref={videoRef} className="hidden" playsInline muted />
+                  <canvas ref={canvasRef} className="w-full h-full object-cover scale-[1.02]" />
+                  
+                  {/* Panduan Area Scan yang diperkecil untuk menyesuaikan zoom 2.5x */}
+                  <div className="absolute inset-0 border-2 border-[#146b99]/40 m-24 rounded-xl pointer-events-none"></div>
+                  <div className="absolute top-1/2 left-24 right-24 h-0.5 bg-[#146b99] shadow-[0_0_10px_rgba(20,107,153,0.8)] pointer-events-none" style={{animation: 'scan-animation 2s ease-in-out infinite'}}></div>
+               </div>
+               
+               <p className="text-white text-sm font-semibold mt-8 animate-pulse text-center">Sedang memindai...</p>
+
+               {cameras.length > 1 && (
+                 <button 
+                   onClick={switchCamera}
+                   className="mt-8 bg-gray-800/80 backdrop-blur-md border border-gray-600 text-white px-6 py-3 rounded-full font-bold tracking-wider hover:bg-gray-700 transition-colors flex items-center gap-2 z-10"
+                 >
+                   <SwitchCamera size={18} /> Ganti Lensa ({currentCamIndex + 1}/{cameras.length})
+                 </button>
+               )}
+           </div>
+        </div>
+      )}
+
+      <div className="max-w-2xl mx-auto space-y-6 animate-in slide-in-from-bottom-8 duration-500">
+        <div className="bg-white p-8 md:p-12 rounded-[2rem] shadow-sm border border-gray-100 flex flex-col items-center text-center">
+          <div className="w-24 h-24 bg-slate-50 rounded-full flex items-center justify-center mb-4">
+             <Camera size={40} className="text-[#146b99]" />
+          </div>
+          
+          <h2 className="text-2xl font-extrabold text-gray-800 mb-3">Scanner Siap</h2>
+          <p className="text-gray-500 text-sm font-medium mb-8 max-w-md">
+            Kamera otomatis terbuka ke layar penuh. Jika terhenti, silakan klik tombol di bawah ini.
+          </p>
+
+          <div className="w-full max-w-md aspect-[4/3] bg-[#0f172a] rounded-3xl relative overflow-hidden flex flex-col items-center justify-center mb-4 shadow-lg">
+             <div className="w-40 h-40 border-2 border-gray-600 rounded-2xl flex items-center justify-center mb-4">
+               <Camera size={48} className="text-gray-600" strokeWidth={1.5} />
+             </div>
+             <button 
+               onClick={() => startScanner()} 
+               className="absolute bottom-6 bg-[#146b99] hover:bg-[#11577c] px-6 py-3 rounded-full border border-blue-400 text-white font-bold tracking-wider shadow-lg transition-all flex items-center gap-2 z-10"
+             >
+                <ScanLine size={18} /> BUKA KAMERA SEKARANG
+             </button>
+          </div>
+        </div>
+
+        {scanResult && !isScanning && (
+          <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-200 animate-in fade-in zoom-in duration-300">
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Hasil Pemindaian</p>
+            
+            <div className="mb-4">
+               <p className="text-xs font-bold text-slate-500 mb-1">Data Mentah Tersandi:</p>
+               <code className="block bg-slate-50 text-slate-500 p-2 rounded-lg text-xs break-all border border-slate-200">
+                 {scanResult.raw}
+               </code>
+            </div>
+
+            {scanResult.decoded.success ? (
+              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-5 p-5 bg-emerald-50 border border-emerald-100 rounded-2xl">
+                 <div className="bg-emerald-500 text-white p-3 rounded-full shadow-lg shadow-emerald-200 shrink-0">
+                   <ShieldCheck size={32} />
+                 </div>
+                 <div className="flex-1 w-full">
+                    <h4 className="text-emerald-900 font-black text-xl leading-none">SEAL VALID!</h4>
+                    <p className="text-emerald-700 font-semibold text-sm mt-1">
+                      ID Terdaftar: <span className="font-mono bg-emerald-200 px-1.5 rounded break-all">{scanResult.decoded.data}</span>
+                    </p>
+                    
+                    {installedMatches.length > 0 ? (
+                       <div className="mt-3 space-y-2">
+                         {installedMatches.map((match, idx) => (
+                           <div key={idx} className="p-3 bg-white rounded-lg border border-emerald-100 text-xs">
+                             <span className="font-extrabold text-emerald-800 block mb-1">Info Lapangan ({match.seal_type}):</span> 
+                             Segel ini sedang terpasang di kendaraan <b>{match.nopol || match.location}</b> (Posisi: {match.seal_category || 'Tidak diketahui'}).
+                           </div>
+                         ))}
+                       </div>
+                    ) : (
+                       <div className="mt-3 p-3 bg-amber-50 rounded-lg border border-amber-200 text-xs font-semibold text-amber-800">
+                         Segel ini Valid, namun <b className="font-extrabold">belum terdata pemasangannya</b> di sistem (belum di-input).
+                       </div>
+                    )}
+                 </div>
+              </div>
+            ) : (
+              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-5 p-5 bg-rose-50 border border-rose-100 rounded-2xl">
+                 <div className="bg-rose-500 text-white p-3 rounded-full shadow-lg shadow-rose-200 shrink-0">
+                   <ShieldAlert size={32} />
+                 </div>
+                 <div>
+                   <h4 className="text-rose-900 font-black text-xl leading-none">INVALID!</h4>
+                   <p className="text-rose-700 font-semibold text-sm mt-1">{scanResult.decoded.error}</p>
+                 </div>
+              </div>
+            )}
+
+            <div className="mt-8 pt-6 border-t border-slate-100 flex justify-center">
+               <button 
+                 onClick={() => startScanner()} 
+                 className="bg-[#146b99] text-white px-8 py-3 rounded-xl font-bold hover:bg-[#11577c] transition-colors shadow-md flex items-center gap-2"
+               >
+                 <ScanLine size={18} /> Scan QR Lainnya
+               </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+};
+
+
+// ============================================================================
+// KOMPONEN APP (PENGHUBUNG SEMUA HALAMAN)
+// ============================================================================
+const App = () => {
+  const [currentUser, setCurrentUser] = useState(null);
+  const [activeMenu, setActiveMenu] = useState('input-data');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const [dbClient, setDbClient] = useState(null);
+  const [generateHistory, setGenerateHistory] = useState([]);
+  const [installedSeals, setInstalledSeals] = useState([]);
+
+  // State Bersama antara Menu "QR Generator" dan Menu "Histori"
+  const [previewBatchId, setPreviewBatchId] = useState(null);
+  const [generatedQRs, setGeneratedQRs] = useState([]);
+  const [selectedBatchIds, setSelectedBatchIds] = useState([]);
+
+  // STATE PERSISTENT UNTUK GENERATOR (Agar template dan setting tidak hilang)
+  const [templateImg, setTemplateImg] = useState(null);
+  const [qrPositions, setQrPositions] = useState([{ id: Date.now(), x: 50, y: 50, size: 20 }]); 
+  const [textPositions, setTextPositions] = useState([]);
+  const [printConfig, setPrintConfig] = useState({ 
+    paper: 'A4', orientation: 'portrait', cols: 1, 
+    marginTop: 10, marginBottom: 10, marginX: 10, gapY: 5, gapX: 5,
+    widthMm: 100, heightMm: 60, showOutline: true, embedQrText: false, autoCenter: true
+  });
+
+  // CUSTOM NOTIFICATION SYSTEM (PENGGANTI ALERT BROWSER)
+  const [notification, setNotification] = useState({ isOpen: false, type: 'success', message: '', onConfirm: null });
+  const showNotification = (message, type = 'success') => setNotification({ isOpen: true, message, type, onConfirm: null });
+  const showConfirm = (message, onConfirm) => setNotification({ isOpen: true, message, type: 'confirm', onConfirm });
+
+  // 1. Inisialisasi Database Supabase
+  useEffect(() => {
+    let isMounted = true;
+    import('https://esm.sh/@supabase/supabase-js@2').then(({ createClient }) => {
+      const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      if (isMounted) {
+        setDbClient(client);
+      }
+    }).catch(err => console.error("Gagal memuat Supabase:", err));
+    
+    return () => { isMounted = false; };
+  }, []);
+
+  // 2. Fetch Data dari Database
+  const fetchDatabaseData = async () => {
+    if (!dbClient) return;
+    setIsSyncing(true);
+    try {
+      const { data: histData } = await dbClient
+        .from('generate_history')
+        .select('*')
+        .order('timestamp', { ascending: false });
+      if (histData) setGenerateHistory(histData);
+
+      const { data: sealData } = await dbClient
+        .from('installed_seals')
+        .select('*')
+        .order('timestamp', { ascending: false });
+      if (sealData) setInstalledSeals(sealData);
+    } catch (err) {
+      console.error("Gagal memuat Data Database:", err);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // 3. Listener Realtime
+  useEffect(() => {
+    if (!currentUser || !dbClient) return;
+    
+    fetchDatabaseData();
+
+    const historySub = dbClient.channel('public:generate_history')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'generate_history' }, fetchDatabaseData)
+      .subscribe();
+      
+    const sealsSub = dbClient.channel('public:installed_seals')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'installed_seals' }, fetchDatabaseData)
+      .subscribe();
+
+    return () => {
+      dbClient.removeChannel(historySub);
+      dbClient.removeChannel(sealsSub);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser, dbClient]);
+
+  // JIKA ADA PARAMETER VERIFY (PUBLIC SCAN VIA KAMERA HP ASLI)
+  const urlParams = new URLSearchParams(window.location.search);
+  const verifyId = urlParams.get('verify');
+
+  if (verifyId) {
+      if (!dbClient) {
+          return <div className="flex h-screen items-center justify-center bg-[#f8f9fa]"><Loader2 className="animate-spin text-[#146b99]" size={48} /></div>;
+      }
+      return <PublicVerification sealId={verifyId} dbClient={dbClient} />;
+  }
+
+  // JIKA BELUM LOGIN
+  if (!currentUser) {
+    return (
+      <LandingPage 
+        onLogin={(user) => {
+          setCurrentUser(user);
+          setActiveMenu(user.role === 'admin' ? 'generator' : 'input-data');
+        }} 
+        dbClient={dbClient} 
+      />
+    );
+  }
+
+  const confirmLogout = async () => {
+    if (dbClient) {
+      await dbClient.auth.signOut();
+    }
+    setCurrentUser(null);
+    setIsMobileMenuOpen(false);
+  };
+
+  // 4. Handle Perpindahan Menu
+  const handleMenuChange = (menuId) => {
+    setActiveMenu(menuId);
+    fetchDatabaseData(); 
+    
+    if (menuId === 'generator') {
+       setPreviewBatchId(null);
+       setGeneratedQRs([]);
+       setSelectedBatchIds([]);
+    }
+  };
+
+  const isAdmin = currentUser.role === 'admin';
+
+  // RENDER STRUKTUR LAYOUT UTAMA
+  return (
+    <div className="flex flex-col h-screen bg-[#f8f9fa] font-sans overflow-hidden">
+      
+      {/* RENDER CUSTOM NOTIFICATION / MODAL */}
+      {notification.isOpen && (
+        <div className="fixed inset-0 z-[999999] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm px-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="p-6 text-center">
+              <div className={`mx-auto w-16 h-16 rounded-full flex items-center justify-center mb-4 ${
+                notification.type === 'success' ? 'bg-emerald-100 text-emerald-600' : 
+                notification.type === 'error' ? 'bg-rose-100 text-rose-600' : 'bg-amber-100 text-amber-600'
+              }`}>
+                {notification.type === 'success' ? <CheckCircle2 size={32} /> : 
+                 notification.type === 'error' ? <ShieldAlert size={32} /> : <AlertTriangle size={32} />}
+              </div>
+              <h3 className="text-xl font-bold text-slate-800 mb-2">
+                {notification.type === 'success' ? 'Berhasil' : 
+                 notification.type === 'error' ? 'Peringatan' : 'Konfirmasi'}
+              </h3>
+              <p className="text-sm text-slate-600 font-medium">{notification.message}</p>
+            </div>
+            <div className="border-t border-slate-100 p-3 bg-slate-50 flex justify-center gap-3">
+              {notification.type === 'confirm' ? (
+                <>
+                  <button onClick={() => setNotification({ ...notification, isOpen: false })} className="w-full py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl font-bold text-sm hover:bg-slate-100 transition-colors shadow-sm">Batal</button>
+                  <button onClick={() => { notification.onConfirm(); setNotification({ ...notification, isOpen: false }); }} className="w-full py-2.5 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-700 transition-colors shadow-sm">Ya, Lanjutkan</button>
+                </>
+              ) : (
+                <button onClick={() => setNotification({ ...notification, isOpen: false })} className="w-full max-w-[200px] py-2.5 bg-[#146b99] text-white rounded-xl font-bold text-sm hover:bg-[#11577c] transition-colors shadow-sm">Mengerti</button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-1 overflow-hidden relative">
+        
+        {/* SIDEBAR DI SISI KIRI */}
+        <Sidebar 
+          activeMenu={activeMenu}
+          onMenuChange={handleMenuChange}
+          isMobileMenuOpen={isMobileMenuOpen}
+          setIsMobileMenuOpen={setIsMobileMenuOpen}
+          isAdmin={isAdmin}
+        />
+
+        {/* KONTEN UTAMA DI SISI KANAN */}
+        <div className="flex-1 flex flex-col overflow-y-auto overflow-x-hidden relative w-full">
+          
+          <Header 
+            activeMenu={activeMenu}
+            setIsMobileMenuOpen={setIsMobileMenuOpen}
+            currentUser={currentUser}
+            onLogout={confirmLogout}
+            isSyncing={isSyncing}
+          />
+          
+          {/* AREA HALAMAN DINAMIS SESUAI MENU */}
+          <div className="flex-1 p-4 md:p-8 w-full max-w-[1400px] mx-auto relative">
+            
+            {activeMenu === 'generator' && isAdmin && (
+              <ViewQRGenerator 
+                dbClient={dbClient}
+                generateHistory={generateHistory}
+                setGenerateHistory={setGenerateHistory}
+                installedSeals={installedSeals}
+                previewBatchId={previewBatchId}
+                setPreviewBatchId={setPreviewBatchId}
+                generatedQRs={generatedQRs}
+                setGeneratedQRs={setGeneratedQRs}
+                selectedBatchIds={selectedBatchIds}
+                setSelectedBatchIds={setSelectedBatchIds}
+                templateImg={templateImg}
+                setTemplateImg={setTemplateImg}
+                qrPositions={qrPositions}
+                setQrPositions={setQrPositions}
+                textPositions={textPositions}
+                setTextPositions={setTextPositions}
+                printConfig={printConfig}
+                setPrintConfig={setPrintConfig}
+                showNotification={showNotification}
+              />
+            )}
+            
+            {activeMenu === 'histori-generator' && isAdmin && (
+              <ViewHistoriGenerator 
+                dbClient={dbClient}
+                generateHistory={generateHistory}
+                setGenerateHistory={setGenerateHistory}
+                installedSeals={installedSeals}
+                setActiveMenu={setActiveMenu}
+                setPreviewBatchId={setPreviewBatchId}
+                setGeneratedQRs={setGeneratedQRs}
+                setSelectedBatchIds={setSelectedBatchIds}
+                showNotification={showNotification}
+                showConfirm={showConfirm}
+              />
+            )}
+            
+            {activeMenu === 'input-data' && (
+              <ViewInputData 
+                currentUser={currentUser}
+                dbClient={dbClient}
+                generateHistory={generateHistory}
+                installedSeals={installedSeals}
+                setInstalledSeals={setInstalledSeals}
+                setActiveMenu={setActiveMenu}
+                showNotification={showNotification}
+              />
+            )}
+            
+            {activeMenu === 'daftar-data' && isAdmin && (
+              <ViewDataList 
+                dbClient={dbClient}
+                installedSeals={installedSeals}
+                setInstalledSeals={setInstalledSeals}
+                showNotification={showNotification}
+                showConfirm={showConfirm}
+              />
+            )}
+            
+            {activeMenu === 'scan' && (
+              <ViewScanner 
+                installedSeals={installedSeals}
+                generateHistory={generateHistory}
+                showNotification={showNotification}
+              />
+            )}
+
+            {/* ========================================================= */}
+            {/* MENU: PELAPORAN (Tahap Pengembangan) */}
+            {/* ========================================================= */}
+            {(activeMenu === 'pelaporan-segel' || activeMenu === 'daftar-pelaporan') && (
+              <div className="flex flex-col items-center justify-center min-h-[60vh] animate-in fade-in zoom-in duration-500">
+                <img 
+                  // ⬇️ SILAKAN GANTI ISI SRC DI BAWAH INI DENGAN PATH LOKAL ATAU URL GAMBAR ANDA
+                  // Contoh lokal: "/under-construction.png" (pastikan file ada di folder public proyek Anda)
+                  src="under_construction.jpg" 
+                  alt="Under Construction Tools" 
+                  className="w-400 h-120 object-contain mb-8 drop-shadow-xl hover:scale-105 transition-transform opacity-90" 
+                  // Jika gambar belum Anda tambahkan ke folder, gambar otomatis disembunyikan agar UI tidak rusak
+                  onError={(e) => { e.target.style.display = 'none'; }}
+                />
+              </div>
+            )}
+            
+          </div>
+        </div>
+      </div>
+      
+      <footer className="w-full h-10 bg-[#8dc63f] flex items-center justify-center text-[13px] text-white font-medium shrink-0 z-50">
+        ©2026 PT. Elnusa Petrofin
+      </footer>
+    </div>
+  );
+};
+
+export default App;
