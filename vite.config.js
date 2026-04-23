@@ -13,7 +13,7 @@ export default defineConfig({
         scan: resolve(__dirname, 'scan.html'),
         pelaporan: resolve(__dirname, 'pelaporan.html'),
         daftarData: resolve(__dirname, 'daftar-data.html'),
-        history: resolve(__dirname, 'history.html')
+        history: resolve(__dirname, 'history.html'),
         daftarpelaporan: resolve(__dirname, 'daftar-pelaporan.html'),
       }
     }
