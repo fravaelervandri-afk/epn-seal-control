@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { supabase } from '../../config/supabase.js';
-import Sidebar from '../../components/Sidebar.jsx';
-import Header from '../../components/Header.jsx';
-import Notification from '../../components/Notification.jsx';
-import { Loader2, Camera, UploadCloud, ChevronDown } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { supabase } from '../../config/supabase';
+import Sidebar from '../../components/Sidebar';
+import Header from '../../components/Header';
+import Notification from '../../components/Notification';
+import { Loader2, Camera, UploadCloud, ChevronDown, Search } from 'lucide-react';
 
 const GOOGLE_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyaA8vZPHL_nD9poI4Afqb_NfGMayq80dBgqtANoAaZ7zw2BueodaugYSNRdpRN75R8/exec";
 
@@ -27,6 +27,11 @@ const Report = ({ session }) => {
   const [uraianObservasi, setUraianObservasi] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // --- STATE UNTUK DROPDOWN SEARCH NOPOL ---
+  const [isNopolDropdownOpen, setIsNopolDropdownOpen] = useState(false);
+  const [nopolSearch, setNopolSearch] = useState('');
+  const nopolDropdownRef = useRef(null);
+
   useEffect(() => {
     const fetchInitialData = async () => {
       setIsSyncing(true);
@@ -34,54 +39,63 @@ const Report = ({ session }) => {
         const { data: roleData } = await supabase.from('user_roles').select('*').eq('user_id', session.user.id).single();
         setCurrentUser(roleData || { name: session.user.email, role: 'user', department: 'Pusat' });
       } else {
-        // Fallback pratinjau Canvas
         setCurrentUser({ name: 'Admin', role: 'admin', department: 'Pusat' });
       }
 
-      // Ambil semua segel yang pernah dipasang
       const { data: sealData } = await supabase.from('installed_seals').select('*').order('timestamp', { ascending: false });
       if (sealData) setInstalledSeals(sealData);
 
-      // Tarik data segel yang sudah dilaporkan (belum berstatus Selesai)
-      const { data: reportData } = await supabase.from('seal_reports').select('sealId, seal_type').neq('status', 'Selesai');
-      if (reportData) setReportedSeals(reportData);
+      // Mengambil daftar ID segel yang sudah pernah dilaporkan
+      const { data: reportData } = await supabase.from('seal_reports').select('sealId');
+      if (reportData) setReportedSeals(reportData.map(r => r.sealId));
 
       setIsSyncing(false);
     };
     fetchInitialData();
   }, [session]);
 
-  // Saring segel yang bisa dilaporkan (Belum dilaporkan & masih terpasang)
-  const unreportedSeals = useMemo(() => {
-    const reportedKeys = reportedSeals.map(r => `${r.sealId}|${r.seal_type}`);
-    
-    return installedSeals.filter(s => {
-      const uniqueKey = `${s.sealId}|${s.seal_type}`;
-      const isReported = reportedKeys.includes(uniqueKey);
-      const isReplaced = s.status === 'Diganti / Dilepas';
-      
-      return !isReported && !isReplaced;
-    });
-  }, [installedSeals, reportedSeals]);
+  // Handle klik di luar area dropdown untuk menutup pencarian Nopol
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (nopolDropdownRef.current && !nopolDropdownRef.current.contains(event.target)) {
+        setIsNopolDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
-  // --- LOGIKA DROPDOWN BERTINGKAT ---
+  // Daftar Nopol unik dari data pemasangan segel (Difilter berdasarkan role & lokasi)
   const uniqueNopols = useMemo(() => {
-    return [...new Set(unreportedSeals.map(s => s.nopol))].filter(Boolean).sort();
-  }, [unreportedSeals]);
+    if (!currentUser) return [];
 
+    const filteredSeals = installedSeals.filter(s => {
+      if (currentUser.role === 'admin') return true; // Admin melihat semua
+      return s.location === currentUser.department;  // User biasa hanya melihat sesuai lokasinya
+    });
+
+    return [...new Set(filteredSeals.map(s => s.nopol))].filter(Boolean).sort();
+  }, [installedSeals, currentUser]);
+
+  // Daftar ID Segel yang tersedia pada Nopol terpilih dan BELUM dilaporkan
   const availableSealIds = useMemo(() => {
     if (!selectedNopol) return [];
-    const sealsForNopol = unreportedSeals.filter(s => s.nopol === selectedNopol);
-    return [...new Set(sealsForNopol.map(s => s.sealId))].filter(Boolean).sort();
-  }, [selectedNopol, unreportedSeals]);
+    return [...new Set(installedSeals
+      .filter(s => s.nopol === selectedNopol && !reportedSeals.includes(s.sealId))
+      .map(s => s.sealId)
+    )].filter(Boolean);
+  }, [selectedNopol, installedSeals, reportedSeals]);
 
+  // Daftar Jenis Segel berdasarkan Nopol dan ID Segel terpilih
   const availableTypes = useMemo(() => {
     if (!selectedNopol || !selectedSealId) return [];
-    const sealsForId = unreportedSeals.filter(s => s.nopol === selectedNopol && s.sealId === selectedSealId);
-    return [...new Set(sealsForId.map(s => s.seal_type))].filter(Boolean);
-  }, [selectedNopol, selectedSealId, unreportedSeals]);
+    return [...new Set(installedSeals
+      .filter(s => s.nopol === selectedNopol && s.sealId === selectedSealId)
+      .map(s => s.seal_type)
+    )].filter(Boolean);
+  }, [selectedNopol, selectedSealId, installedSeals]);
 
-  // Auto-select Jenis Segel jika hanya ada 1 pilihan
+  // Auto-select jenis segel jika hanya ada 1 tipe yang tersedia
   useEffect(() => {
     if (availableTypes.length === 1) {
       setSealType(availableTypes[0]);
@@ -89,7 +103,6 @@ const Report = ({ session }) => {
       setSealType('');
     }
   }, [availableTypes, sealType]);
-
 
   const handlePhotoUpload = (e) => {
     const file = e.target.files[0];
@@ -134,7 +147,6 @@ const Report = ({ session }) => {
       const reportData = {
         nopol: selectedNopol,
         sealId: selectedSealId,
-        // Gunakan Optional Chaining dan Fallback agar tidak NULL
         seal_category: targetSeal?.seal_category || 'Tidak Diketahui',
         seal_type: sealType || 'Tidak Diketahui',
         incident_type: incidentCategory,
@@ -149,6 +161,9 @@ const Report = ({ session }) => {
 
       const { error } = await supabase.from('seal_reports').insert([reportData]);
       if (error) throw error;
+
+      // Update daftar reportedSeals di state agar segera hilang dari dropdown
+      setReportedSeals(prev => [...prev, selectedSealId]);
 
       // 4. Update status di database installed_seals (Soft Update)
       const { error: updateError } = await supabase
@@ -205,18 +220,57 @@ const Report = ({ session }) => {
                       </div>
                     </div>
 
+                    {/* --- KOTAK DROPDOWN SEARCH NOPOL --- */}
                     <div>
                       <label className="block text-[13px] font-bold text-gray-700 mb-2">Nomor Polisi <span className="text-red-500">*</span></label>
-                      <div className="relative">
-                        <select 
-                          value={selectedNopol} 
-                          onChange={(e) => { setSelectedNopol(e.target.value); setSelectedSealId(''); }}
-                          className="w-full p-3 border border-gray-300 rounded-lg font-bold text-gray-800 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 appearance-none bg-white cursor-pointer"
+                      <div className="relative" ref={nopolDropdownRef}>
+                        <div 
+                          onClick={() => { setIsNopolDropdownOpen(!isNopolDropdownOpen); setNopolSearch(''); }}
+                          className={`w-full p-3 border ${isNopolDropdownOpen ? 'border-blue-500 ring-1 ring-blue-500' : 'border-gray-300'} rounded-lg flex justify-between items-center bg-white cursor-pointer transition-colors min-h-[50px]`}
                         >
-                          <option value="">Pilih Kendaraan Terindikasi</option>
-                          {uniqueNopols.map(n => <option key={n} value={n}>{n}</option>)}
-                        </select>
-                        <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={18} />
+                          <span className={selectedNopol ? "text-gray-800 font-bold" : "text-gray-400 font-bold"}>
+                            {selectedNopol || "Pilih Kendaraan Terindikasi"}
+                          </span>
+                          <ChevronDown className={`text-gray-400 transition-transform ${isNopolDropdownOpen ? 'rotate-180' : ''}`} size={18} />
+                        </div>
+
+                        {isNopolDropdownOpen && (
+                          <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-xl overflow-hidden">
+                            <div className="p-2 border-b flex items-center bg-gray-50">
+                              <Search size={16} className="text-gray-400 mr-2" />
+                              <input 
+                                autoFocus 
+                                type="text" 
+                                className="w-full bg-transparent outline-none text-sm font-semibold text-gray-700" 
+                                placeholder="Cari Nomor Polisi..." 
+                                value={nopolSearch} 
+                                onChange={e => setNopolSearch(e.target.value)} 
+                                onClick={e => e.stopPropagation()} 
+                              />
+                            </div>
+                            <ul className="max-h-48 overflow-y-auto custom-scrollbar">
+                              {uniqueNopols
+                                .filter(n => n.toLowerCase().includes(nopolSearch.toLowerCase()))
+                                .map(n => (
+                                  <li 
+                                    key={n} 
+                                    onClick={() => { 
+                                      setSelectedNopol(n); 
+                                      setSelectedSealId(''); 
+                                      setSealType('');
+                                      setIsNopolDropdownOpen(false); 
+                                    }} 
+                                    className="px-4 py-3 text-sm cursor-pointer hover:bg-blue-50 border-b border-gray-50 font-bold text-gray-700 transition-colors"
+                                  >
+                                    {n}
+                                  </li>
+                                ))}
+                              {uniqueNopols.filter(n => n.toLowerCase().includes(nopolSearch.toLowerCase())).length === 0 && (
+                                <li className="p-4 text-sm text-center text-gray-500 font-medium">Kendaraan tidak ditemukan</li>
+                              )}
+                            </ul>
+                          </div>
+                        )}
                       </div>
                     </div>
 
