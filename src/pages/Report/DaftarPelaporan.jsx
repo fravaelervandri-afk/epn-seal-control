@@ -3,7 +3,7 @@ import { supabase } from '../../config/supabase';
 import Sidebar from '../../components/Sidebar';
 import Header from '../../components/Header';
 import Notification from '../../components/Notification';
-import { Search, Loader2, CalendarClock, Eye, FileSpreadsheet, X, Filter, CheckSquare, Square, Download, ChevronDown, CheckCircle2, AlertTriangle, ShieldAlert, UploadCloud, Camera, Check } from 'lucide-react';
+import { Search, Loader2, CalendarClock, Eye, FileSpreadsheet, X, CheckSquare, Square, Download, ChevronDown, CheckCircle2, AlertTriangle, ShieldAlert, UploadCloud, Camera } from 'lucide-react';
 
 const GOOGLE_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyaA8vZPHL_nD9poI4Afqb_NfGMayq80dBgqtANoAaZ7zw2BueodaugYSNRdpRN75R8/exec";
 
@@ -110,7 +110,7 @@ const DaftarPelaporan = ({ session }) => {
       const result = await response.json();
       if (!result.success) throw new Error(result.error);
 
-      // Update Form Laporan -> Selesai
+      // 1. Update Form Laporan -> Selesai
       const { error } = await supabase
         .from('seal_reports')
         .update({
@@ -124,12 +124,14 @@ const DaftarPelaporan = ({ session }) => {
 
       if (error) throw error;
 
-      // Soft Delete Segel Terpasang -> Diganti / Dilepas
+      // 2. Soft Delete Segel Terpasang -> Diganti / Dilepas
+      // IMPLEMENTASI OPSI A: Cek spesifik seal_type agar segel pasangannya (jika double) tidak ikut terhapus
       const { error: updateError } = await supabase
         .from('installed_seals')
         .update({ status: 'Diganti / Dilepas' })
         .eq('sealId', selectedReport.sealId)
-        .eq('nopol', selectedReport.nopol);
+        .eq('nopol', selectedReport.nopol)
+        .eq('seal_type', selectedReport.seal_type); // Kunci Pemisah Opsi A
         
       if (updateError) throw updateError;
 
@@ -167,6 +169,7 @@ const DaftarPelaporan = ({ session }) => {
           'No': idx + 1,
           'No. Polisi': s.nopol,
           'ID Segel': s.sealId,
+          'Jenis Segel': s.seal_type || '-', // Visibilitas Excel
           'Kategori': s.seal_category,
           'Lokasi': s.location,
           'Tanggal Lapor': s.report_date,
@@ -183,7 +186,7 @@ const DaftarPelaporan = ({ session }) => {
         const workbook = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(workbook, worksheet, "Laporan Insiden");
         
-        const wscols = [{wch:5}, {wch:15}, {wch:20}, {wch:15}, {wch:20}, {wch:20}, {wch:20}, {wch:20}, {wch:35}, {wch:20}, {wch:20}, {wch:20}, {wch:35}];
+        const wscols = [{wch:5}, {wch:15}, {wch:20}, {wch:20}, {wch:15}, {wch:20}, {wch:20}, {wch:20}, {wch:20}, {wch:35}, {wch:20}, {wch:20}, {wch:20}, {wch:35}];
         worksheet['!cols'] = wscols;
 
         XLSX.writeFile(workbook, `Rekap_Insiden_Segel_${new Date().toISOString().split('T')[0]}.xlsx`);
@@ -267,7 +270,9 @@ const DaftarPelaporan = ({ session }) => {
                              </div>
                              <div className="text-right">
                                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">ID Segel</p>
-                               <p className="font-mono font-bold text-[#146b99]">{selectedReport.sealId}</p>
+                               <p className="font-mono font-bold text-[#146b99] text-lg leading-none">{selectedReport.sealId}</p>
+                               {/* Menampilkan Spesifik Jenis Segel Opsi A */}
+                               <p className="text-[10px] font-extrabold text-rose-600 mt-1 uppercase">{selectedReport.seal_type}</p>
                              </div>
                           </div>
                           
@@ -421,7 +426,10 @@ const DaftarPelaporan = ({ session }) => {
                           </td>
                           <td className="px-5 py-4">
                              <div className="font-mono font-black text-[#146b99] text-sm bg-blue-50 px-2 py-0.5 rounded border border-blue-100 w-fit">{report.sealId}</div>
-                             <div className="text-[10px] font-bold text-gray-500 mt-1 uppercase tracking-wider">{report.seal_category}</div>
+                             {/* Visibilitas Opsi A untuk Tabel */}
+                             <div className="text-[10px] font-bold text-gray-500 mt-1 uppercase tracking-wider">
+                               {report.seal_category} <span className="text-rose-500 font-extrabold">- {report.seal_type}</span>
+                             </div>
                           </td>
                           <td className="px-5 py-4 text-sm font-extrabold text-rose-600 whitespace-nowrap">
                              {report.incident_type}
