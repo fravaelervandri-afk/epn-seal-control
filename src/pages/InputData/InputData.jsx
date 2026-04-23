@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Lock, Camera, Scan, X, Loader2, SwitchCamera, ChevronDown, Search, CheckCircle2 } from 'lucide-react';
 
-import { supabase } from '../../config/supabase';
-import Sidebar from '../../components/Sidebar';
-import Header from '../../components/Header';
-import Notification from '../../components/Notification';
+import { supabase } from '../../config/supabase.js';
+import Sidebar from '../../components/Sidebar.jsx';
+import Header from '../../components/Header.jsx';
+import Notification from '../../components/Notification.jsx';
 
 const GOOGLE_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyaA8vZPHL_nD9poI4Afqb_NfGMayq80dBgqtANoAaZ7zw2BueodaugYSNRdpRN75R8/exec";
 
@@ -436,6 +436,7 @@ const InputData = ({ session }) => {
           const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = src;
       });
 
+      // BAGIAN YANG SEBELUMNYA TERPOTONG KINI DIPERBAIKI (Penutup Try-Catch pada Looping Image Canvas)
       for (let i = 0; i < imagesToGrid.length; i++) {
           const imgItem = imagesToGrid[i];
           try {
@@ -455,17 +456,26 @@ const InputData = ({ session }) => {
               ctx.fillText(imgItem.label, x + (CELL_SIZE / 2), y + CELL_SIZE - 40);
               
               ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 10; ctx.strokeRect(x, y, CELL_SIZE, CELL_SIZE);
-          } catch (err) {}
+          } catch (err) {
+              console.error('Gagal memuat gambar atau font', err);
+          }
       }
 
+      // 3. KOMPRESI KE BASE64 (JPEG 75%)
       const gridBase64 = canvas.toDataURL('image/jpeg', 0.75).split(',')[1];
+      
       const tglSegel = new Date().toLocaleDateString('id-ID').replace(/\//g, '-');
       const newFilename = `${installForm.nopol}_${installForm.location}_${tglSegel}.jpg`;
       
+      // 4. KIRIM REQUEST TUNGGAL KE GOOGLE APPS SCRIPT DENGAN PARAMETER FOLDER TYPE
       const response = await fetch(GOOGLE_APPS_SCRIPT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ base64: gridBase64, filename: newFilename })
+        body: JSON.stringify({
+           base64: gridBase64,
+           filename: newFilename,
+           folderType: 'INSTALL'
+        })
       });
 
       const result = await response.json();
