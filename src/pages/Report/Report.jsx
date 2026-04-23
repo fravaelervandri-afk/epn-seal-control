@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { supabase } from '../../config/supabase';
-import Sidebar from '../../components/Sidebar';
-import Header from '../../components/Header';
-import Notification from '../../components/Notification';
+import { supabase } from '../../config/supabase.js';
+import Sidebar from '../../components/Sidebar.jsx';
+import Header from '../../components/Header.jsx';
+import Notification from '../../components/Notification.jsx';
 import { Loader2, Camera, UploadCloud, ChevronDown } from 'lucide-react';
 
 const GOOGLE_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyaA8vZPHL_nD9poI4Afqb_NfGMayq80dBgqtANoAaZ7zw2BueodaugYSNRdpRN75R8/exec";
@@ -18,7 +18,7 @@ const Report = ({ session }) => {
   const [notification, setNotification] = useState({ isOpen: false, type: 'success', message: '', onConfirm: null });
   const showNotification = (message, type = 'success') => setNotification({ isOpen: true, message, type, onConfirm: null });
 
-  // --- STATE FORM ---
+  // --- STATE FORM PELAPORAN ---
   const [selectedNopol, setSelectedNopol] = useState('');
   const [selectedSealId, setSelectedSealId] = useState('');
   const [sealType, setSealType] = useState('');
@@ -34,7 +34,7 @@ const Report = ({ session }) => {
         const { data: roleData } = await supabase.from('user_roles').select('*').eq('user_id', session.user.id).single();
         setCurrentUser(roleData || { name: session.user.email, role: 'user', department: 'Pusat' });
       } else {
-        // Fallback untuk mode pratinjau jika sesi tidak tersedia
+        // Fallback pratinjau Canvas
         setCurrentUser({ name: 'Admin', role: 'admin', department: 'Pusat' });
       }
 
@@ -51,7 +51,7 @@ const Report = ({ session }) => {
     fetchInitialData();
   }, [session]);
 
-  // IMPLEMENTASI OPSI A: Saring segel, pastikan kombinasi ID dan Jenis belum dilaporkan
+  // Saring segel yang bisa dilaporkan (Belum dilaporkan & masih terpasang)
   const unreportedSeals = useMemo(() => {
     const reportedKeys = reportedSeals.map(r => `${r.sealId}|${r.seal_type}`);
     
@@ -60,7 +60,6 @@ const Report = ({ session }) => {
       const isReported = reportedKeys.includes(uniqueKey);
       const isReplaced = s.status === 'Diganti / Dilepas';
       
-      // Kembalikan segel yang BELUM dilaporkan dan BELUM dilepas
       return !isReported && !isReplaced;
     });
   }, [installedSeals, reportedSeals]);
@@ -82,7 +81,7 @@ const Report = ({ session }) => {
     return [...new Set(sealsForId.map(s => s.seal_type))].filter(Boolean);
   }, [selectedNopol, selectedSealId, unreportedSeals]);
 
-  // Auto-select Jenis Segel jika hanya ada 1 pilihan tersisa
+  // Auto-select Jenis Segel jika hanya ada 1 pilihan
   useEffect(() => {
     if (availableTypes.length === 1) {
       setSealType(availableTypes[0]);
@@ -108,16 +107,20 @@ const Report = ({ session }) => {
     
     setIsSubmitting(true);
     try {
-      // 1. Ekstrak Base64 dan buat nama file khusus
+      // 1. Persiapan data foto
       const base64Data = incidentPhoto.split(',')[1];
       const tglReport = new Date().toLocaleDateString('id-ID').replace(/\//g, '-');
       const filename = `REPORT_${selectedNopol}_${sealType.replace(/\s+/g, '')}_${tglReport}.jpg`;
 
-      // 2. Upload ke Google Drive via Apps Script
+      // 2. Upload ke Google Drive dengan parameter FOLDER TYPE
       const response = await fetch(GOOGLE_APPS_SCRIPT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ base64: base64Data, filename: filename })
+        body: JSON.stringify({ 
+           base64: base64Data, 
+           filename: filename,
+           folderType: 'REPORT' // Mengarahkan ke subfolder Pelaporan
+        })
       });
 
       const result = await response.json();
@@ -131,7 +134,7 @@ const Report = ({ session }) => {
       const reportData = {
         nopol: selectedNopol,
         sealId: selectedSealId,
-        // FIX BUG: Cegah error apabila seal_category di database bernilai NULL
+        // Gunakan Optional Chaining dan Fallback agar tidak NULL
         seal_category: targetSeal?.seal_category || 'Tidak Diketahui',
         seal_type: sealType || 'Tidak Diketahui',
         incident_type: incidentCategory,
@@ -157,7 +160,7 @@ const Report = ({ session }) => {
         
       if (updateError) throw updateError;
 
-      showNotification("Laporan berhasil dikirim! Menunggu tindak lanjut dari tim terkait.", "success");
+      showNotification("Laporan kerusakan berhasil dikirim!", "success");
       
       // Reset Form
       setIncidentPhoto(null); 
@@ -193,13 +196,11 @@ const Report = ({ session }) => {
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
-                
-                {/* Kolom Kiri: Input Utama */}
                 <div className="space-y-8">
                   <div className="space-y-6">
                     <div>
                       <label className="block text-[13px] font-bold text-gray-700 mb-2">Wilayah Kerja <span className="text-red-500">*</span></label>
-                      <div className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg font-bold text-gray-800">
+                      <div className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg font-bold text-gray-800 uppercase tracking-wide">
                         {currentUser?.department || 'Head Office'}
                       </div>
                     </div>
@@ -288,7 +289,6 @@ const Report = ({ session }) => {
                   </div>
                 </div>
 
-                {/* Kolom Kanan: Uraian */}
                 <div className="space-y-6">
                   <div className="bg-slate-50 border border-slate-200 p-6 rounded-xl space-y-6 h-full flex flex-col">
                     <div className="flex-1">
