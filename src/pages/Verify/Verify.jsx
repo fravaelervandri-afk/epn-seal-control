@@ -22,7 +22,6 @@ const Verify = () => {
 
     const checkSeal = async () => {
       try {
-        // PERBAIKAN: Menghapus .single() agar bisa membaca "Double Segel"
         const { data: sealData, error } = await supabase
           .from('installed_seals')
           .select('*')
@@ -48,19 +47,23 @@ const Verify = () => {
   }, []);
 
   return (
-    <div className="min-h-screen bg-[#f8f9fa] flex flex-col items-center justify-center p-6 font-sans selection:bg-blue-200">
-      <div className="bg-white w-full max-w-md rounded-3xl shadow-xl overflow-hidden animate-in zoom-in duration-500 border border-slate-100">
+    // 1. Kunci tinggi luar menggunakan 100dvh (Dynamic Viewport Height khusus mobile)
+    <div className="h-[100dvh] bg-[#f8f9fa] flex flex-col items-center justify-center p-4 sm:p-6 font-sans selection:bg-blue-200 overflow-hidden">
+      
+      {/* 2. Beri max-height pada kotak putih dan jadikan flex-col */}
+      <div className="bg-white w-full max-w-md rounded-3xl shadow-xl overflow-hidden animate-in zoom-in duration-500 border border-slate-100 flex flex-col max-h-[95vh] sm:max-h-[90vh]">
          
-         {/* HEADER LOGO */}
-         <div className="bg-slate-900 p-5 flex justify-center border-b-4 border-[#8dc63f]">
-             <img src="/logo-elnusa.png" alt="Elnusa Logo" className="h-8 object-contain brightness-0 invert" onError={(e) => e.target.style.display='none'} />
+         {/* HEADER LOGO - Diberi shrink-0 agar tidak ikut terkompres/scroll */}
+         <div className="bg-slate-900 p-4 sm:p-5 flex justify-center border-b-4 border-[#8dc63f] shrink-0">
+             <img src="/logo-elnusa.png" alt="Elnusa Logo" className="h-7 sm:h-8 object-contain brightness-0 invert" onError={(e) => e.target.style.display='none'} />
          </div>
          
-         <div className="p-8 flex flex-col items-center text-center">
+         {/* 3. KONTEN TENGAH - Diberi flex-1 dan overflow-y-auto agar bisa di-scroll */}
+         <div className="p-6 sm:p-8 flex flex-col items-center text-center overflow-y-auto custom-scrollbar flex-1 relative">
             
             {/* STATE 1: LOADING */}
             {status === 'loading' && (
-               <div className="py-12 flex flex-col items-center">
+               <div className="my-auto py-12 flex flex-col items-center">
                   <Loader2 size={48} className="animate-spin text-[#146b99] mb-4" />
                   <p className="text-slate-500 font-bold">Memverifikasi Data Segel...</p>
                </div>
@@ -68,8 +71,8 @@ const Verify = () => {
             
             {/* STATE 2: VALID (Bisa memuat Single atau Double Segel) */}
             {status === 'valid' && (
-               <>
-                  <div className="w-24 h-24 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mb-6 shadow-inner ring-4 ring-emerald-50">
+               <div className="w-full flex flex-col items-center animate-in fade-in">
+                  <div className="w-24 h-24 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mb-6 shadow-inner ring-4 ring-emerald-50 shrink-0">
                      <ShieldCheck size={48} />
                   </div>
                   <h2 className="text-3xl font-black text-slate-800 mb-2">SEAL VALID</h2>
@@ -85,7 +88,8 @@ const Verify = () => {
                         {/* Indikator Peringatan Double Segel */}
                         {data.length > 1 && (
                            <div className="mt-3 bg-amber-50 border border-amber-200 p-2.5 rounded-lg text-amber-800 text-xs font-bold flex items-center gap-2">
-                              <span>⚠️</span> Terdapat {data.length} fisik segel aktif yang dipasang menggunakan ID ini.
+                              <span className="shrink-0">⚠️</span> 
+                              <span>Terdapat {data.length} fisik segel aktif yang dipasang menggunakan ID ini.</span>
                            </div>
                         )}
                      </div>
@@ -97,7 +101,7 @@ const Verify = () => {
                                  <p className="text-[10px] uppercase font-extrabold text-slate-400 tracking-wider">
                                     Detail Fisik Segel {data.length > 1 ? idx + 1 : ''}
                                  </p>
-                                 <span className="bg-emerald-100 text-emerald-700 text-[9px] font-bold px-2 py-0.5 rounded uppercase tracking-widest border border-emerald-200">
+                                 <span className="bg-emerald-100 text-emerald-700 text-[9px] font-bold px-2 py-0.5 rounded uppercase tracking-widest border border-emerald-200 shrink-0 ml-2">
                                     TERPASANG
                                  </span>
                               </div>
@@ -114,13 +118,13 @@ const Verify = () => {
                         ))}
                      </div>
                   </div>
-               </>
+               </div>
             )}
             
             {/* STATE 3: INVALID */}
             {status === 'invalid' && (
-               <>
-                  <div className="w-24 h-24 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mb-6 shadow-inner ring-4 ring-rose-50">
+               <div className="w-full flex flex-col items-center animate-in fade-in my-auto">
+                  <div className="w-24 h-24 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mb-6 shadow-inner ring-4 ring-rose-50 shrink-0">
                      <ShieldAlert size={48} />
                   </div>
                   <h2 className="text-3xl font-black text-rose-600 mb-2">INVALID</h2>
@@ -135,16 +139,16 @@ const Verify = () => {
                         Peringatan: Jika benda fisik segel terpasang, hal ini mengindikasikan adanya indikasi pemalsuan, penggunaan ulang yang ilegal, atau kerusakan.
                      </p>
                   </div>
-               </>
+               </div>
             )}
 
-            <button onClick={() => window.location.href = '/'} className="mt-8 w-full py-4 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold rounded-xl transition-colors shadow-sm border border-slate-200 flex items-center justify-center gap-2">
+            <button onClick={() => window.location.href = '/index.html'} className="mt-8 w-full py-4 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold rounded-xl transition-colors shadow-sm border border-slate-200 flex items-center justify-center gap-2 shrink-0">
                Masuk ke Dasbor Sistem
             </button>
          </div>
          
-         {/* FOOTER */}
-         <div className="bg-slate-50 p-4 text-center border-t border-slate-100">
+         {/* 4. FOOTER - Diberi shrink-0 agar selalu terlihat di dasar card */}
+         <div className="bg-slate-50 p-3 sm:p-4 text-center border-t border-slate-100 shrink-0">
            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Sistem Keamanan Segel - Elnusa Petrofin</p>
          </div>
       </div>
