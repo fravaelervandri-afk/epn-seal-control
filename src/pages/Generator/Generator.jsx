@@ -91,7 +91,7 @@ const Generator = ({ session }) => {
   }, [inputPrefix, previewBatchId, generateHistory]);
 
   // ==========================================================================
-  // 4. KONTROL PRESISI ELEMEN (SINKRON UKURAN)
+  // 4. MANAJEMEN ELEMEN (SINKRON UKURAN)
   // ==========================================================================
   const addQrPosition = () => {
     const currentSize = qrPositions.length > 0 ? qrPositions[0].size : 25;
