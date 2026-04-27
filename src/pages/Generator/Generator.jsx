@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { PlusCircle, Download, X, Type, Plus, Info, Loader2, Trash2, ShieldCheck, Printer, Settings2 } from 'lucide-react';
 
-import { supabase } from '../../config/supabase';
-import Sidebar from '../../components/Sidebar';
-import Header from '../../components/Header';
-import Notification from '../../components/Notification';
-import QRCodeCustom from '../../components/QRCodeCustom';
+import { supabase } from '../../config/supabase.js';
+import Sidebar from '../../components/Sidebar.jsx';
+import Header from '../../components/Header.jsx';
+import Notification from '../../components/Notification.jsx';
+import QRCodeCustom from '../../components/QRCodeCustom.jsx';
 
 const Generator = ({ session }) => {
   // ==========================================================================
@@ -240,7 +240,7 @@ const Generator = ({ session }) => {
         const batch = uniqueIds.slice(b, b + batchLimit);
         await Promise.all(batch.map(async (id) => {
            try {
-              const dataUrl = await generateQROnCanvas(id, `${window.location.origin}/?verify=${id}`, 300, printConfig.embedQrText);
+              const dataUrl = await generateQROnCanvas(id, `${window.location.origin}/verify.html?verify=${id}`, 300, printConfig.embedQrText);
               qrImageCache[id] = dataUrl;
            } catch (e) { console.error(`Gagal fetch QR untuk ${id}`, e); }
         }));
@@ -781,7 +781,7 @@ const Generator = ({ session }) => {
                          >
                             <QRCodeCustom 
                               displayValue={`${inputPrefix}XXXXX`} 
-                              qrPayload={`${window.location.origin}/?verify=${inputPrefix}XXXXX`} 
+                              qrPayload={`${window.location.origin}/verify.html?verify=${inputPrefix}XXXXX`} 
                               size={300} 
                               showText={printConfig.embedQrText} 
                             />
@@ -873,7 +873,7 @@ const Generator = ({ session }) => {
                              
                              {qrPositions.map((pos) => (
                                 <div key={pos.id} className="absolute bg-white p-[2px] rounded-sm pointer-events-none" style={{ left: `${pos.x}%`, top: `${pos.y}%`, width: `${pos.size}%`, transform: 'translate(-50%, -50%)' }}>
-                                   <QRCodeCustom displayValue={item.id} qrPayload={`${window.location.origin}/?verify=${item.id}`} size={250} showText={printConfig.embedQrText} />
+                                   <QRCodeCustom displayValue={item.id} qrPayload={`${window.location.origin}/verify.html?verify=${item.id}`} size={250} showText={printConfig.embedQrText} />
                                 </div>
                              ))}
 
